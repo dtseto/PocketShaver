@@ -166,6 +166,57 @@ static bool                         compositor_initialized = false;
 static _Atomic uint64_t s_present_rect_origin = 0;   // (x << 32) | y, window points
 static _Atomic uint64_t s_present_rect_size   = 0;   // (w << 32) | h, window points
 
+// Unified guest map — single source of truth for BOTH the render-side
+// letterbox (Present viewport / overlay scale) and the mouse-side map
+// (VideoMapWindowPointToGuestAndMove). Published atomically on the main
+// thread together with the fb dims the fit was computed from, so a
+// fullscreen/mode-switch transient can never pair a new rect with stale
+// fb dims (the host/guest cursor split). Seqlock: gen is odd while the
+// payload is being written; readers retry on odd gen or gen change.
+static _Atomic uint32_t s_guest_map_gen = 0;
+static _Atomic int s_guest_map_rx = 0;
+static _Atomic int s_guest_map_ry = 0;
+static _Atomic int s_guest_map_rw = 0;
+static _Atomic int s_guest_map_rh = 0;
+static _Atomic int s_guest_map_fb_w = 0;
+static _Atomic int s_guest_map_fb_h = 0;
+
+// Defined after the depth-aware state (needs compositor_pixel_*); publishes
+// rect + fb dims atomically via seqlock (odd gen = write in progress).
+static void MetalCompositorPublishGuestMap(int rx, int ry, int rw, int rh);
+
+// Seqlock read of the unified guest map. Returns 1 with a consistent
+// snapshot, 0 if never published (caller falls back to the legacy path).
+static int MetalCompositorReadGuestMap(int *out_rx, int *out_ry,
+                                        int *out_rw, int *out_rh,
+                                        int *out_fb_w, int *out_fb_h)
+{
+    for (int tries = 0; tries < 4; tries++) {
+        uint32_t g0 = atomic_load_explicit(&s_guest_map_gen, memory_order_acquire);
+        if ((g0 & 1u) || g0 == 0) {
+            if (g0 == 0) return 0;
+            continue; // write in progress; retry
+        }
+        int rx = atomic_load_explicit(&s_guest_map_rx, memory_order_relaxed);
+        int ry = atomic_load_explicit(&s_guest_map_ry, memory_order_relaxed);
+        int rw = atomic_load_explicit(&s_guest_map_rw, memory_order_relaxed);
+        int rh = atomic_load_explicit(&s_guest_map_rh, memory_order_relaxed);
+        int fb_w = atomic_load_explicit(&s_guest_map_fb_w, memory_order_relaxed);
+        int fb_h = atomic_load_explicit(&s_guest_map_fb_h, memory_order_relaxed);
+        uint32_t g1 = atomic_load_explicit(&s_guest_map_gen, memory_order_acquire);
+        if (g0 != g1) continue; // torn; retry
+        if (rw <= 0 || rh <= 0 || fb_w <= 0 || fb_h <= 0) return 0;
+        if (out_rx) *out_rx = rx;
+        if (out_ry) *out_ry = ry;
+        if (out_rw) *out_rw = rw;
+        if (out_rh) *out_rh = rh;
+        if (out_fb_w) *out_fb_w = fb_w;
+        if (out_fb_h) *out_fb_h = fb_h;
+        return 1;
+    }
+    return 0;
+}
+
 extern "C" void MetalCompositorRefreshPresentRect(void)
 {
     // UIKit reads (-bounds, -convertRect:) are main-thread only. Off-thread
@@ -189,6 +240,10 @@ extern "C" void MetalCompositorRefreshPresentRect(void)
         ((uint64_t)(uint32_t)x << 32) | (uint32_t)y, memory_order_relaxed);
     atomic_store_explicit(&s_present_rect_size,
         ((uint64_t)(uint32_t)w << 32) | (uint32_t)h, memory_order_relaxed);
+    // Unified guest map: same rect + the fb dims the render-side fit uses,
+    // published atomically so the mouse map can never pair a fresh rect
+    // with stale fb dims (the host/guest cursor split).
+    MetalCompositorPublishGuestMap(x, y, w, h);
 }
 
 extern "C" void MetalCompositorGetPresentRect(int *out_x, int *out_y,
@@ -253,6 +308,62 @@ static int                          compositor_pitch     = 0;
 
 // Shader library cache (retained across Init/Resize cycles for reuse).
 static id<MTLLibrary>               compositor_library  = nil;
+
+// Unified guest-map publish (definition; declaration lives with the seqlock
+// state above). Reads compositor_pixel_* + texture height so both the
+// render-side fit and the mouse-side map derive from the same fb dims.
+static void MetalCompositorPublishGuestMap(int rx, int ry, int rw, int rh)
+{
+    if (rw <= 0 || rh <= 0) return;
+    int fb_w = compositor_pixel_width;
+    int fb_h = compositor_texture ? (int)[compositor_texture height] : 0;
+    if (fb_h <= 0) fb_h = compositor_pixel_height;
+    if (fb_w <= 0 || fb_h <= 0) return;
+    uint32_t g0 = atomic_load_explicit(&s_guest_map_gen, memory_order_relaxed);
+    uint32_t g = (g0 + 1) | 1u; // odd => write in progress
+    atomic_store_explicit(&s_guest_map_gen, g, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rx, rx, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_ry, ry, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rw, rw, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rh, rh, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_fb_w, fb_w, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_fb_h, fb_h, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_gen, g + 1, memory_order_relaxed); // even => consistent
+}
+
+// Resize-path publish with explicit fb dims. Resize runs on the emulation
+// thread (no UIView access) and has just committed new compositor_pixel_*
+// state; keep the last-known rect but re-stamp the fb dims so the mouse map
+// can never pair the old fb dims with the pre-refresh drawable.
+static void MetalCompositorPublishGuestMapForResize(int fb_w, int fb_h)
+{
+    if (fb_w <= 0 || fb_h <= 0) return;
+    int rw = atomic_load_explicit(&s_guest_map_rw, memory_order_relaxed);
+    int rh = atomic_load_explicit(&s_guest_map_rh, memory_order_relaxed);
+    if (rw <= 0 || rh <= 0) return; // no rect yet; Refresh publishes on main
+    int rx = atomic_load_explicit(&s_guest_map_rx, memory_order_relaxed);
+    int ry = atomic_load_explicit(&s_guest_map_ry, memory_order_relaxed);
+    uint32_t g0 = atomic_load_explicit(&s_guest_map_gen, memory_order_relaxed);
+    uint32_t g = (g0 + 1) | 1u;
+    atomic_store_explicit(&s_guest_map_gen, g, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rx, rx, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_ry, ry, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rw, rw, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_rh, rh, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_fb_w, fb_w, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_fb_h, fb_h, memory_order_relaxed);
+    atomic_store_explicit(&s_guest_map_gen, g + 1, memory_order_relaxed);
+}
+
+// C-linkage getter for video_sdl2.cpp: consistent (rect + fb dims) snapshot.
+// Returns 1 on success, 0 if never published (caller uses the legacy path).
+extern "C" int MetalCompositorGetGuestMap(int *out_rx, int *out_ry,
+                                             int *out_rw, int *out_rh,
+                                             int *out_fb_w, int *out_fb_h)
+{
+    return MetalCompositorReadGuestMap(out_rx, out_ry, out_rw, out_rh,
+                                        out_fb_w, out_fb_h);
+}
 
 static NSUInteger                   s_last_overlay_scale_target_w = 0;
 static NSUInteger                   s_last_overlay_scale_target_h = 0;
@@ -377,7 +488,9 @@ static void MetalCompositorLogGeometry(const char *tag)
     int sdl_w = 0, sdl_h = 0;
     if (sdl_window) SDL_GetWindowSize(sdl_window, &sdl_w, &sdl_h);
     CGAffineTransform t = compositor_view.transform;
-    COMPOSITOR_ERR("CompositorGeometry %s: fb=%dx%d drawable=%.0fx%.0f scale=%.2f view=%.0fx%.0f(view frame=%.0fx%.0f@%.0f,%.0f) superview=%.0fx%.0f(sv frame=%.0fx%.0f@%.0f,%.0f) window=%.0fx%.0f sdl=%dx%d transform=[%.2f %.2f %.2f %.2f] svclass=%s fullscreen=%d", tag,
+    int grx = 0, gry = 0, grw = 0, grh = 0, gfbw = 0, gfbh = 0;
+    int have_guest_map = MetalCompositorReadGuestMap(&grx, &gry, &grw, &grh, &gfbw, &gfbh);
+    COMPOSITOR_ERR("CompositorGeometry %s: fb=%dx%d drawable=%.0fx%.0f scale=%.2f view=%.0fx%.0f(view frame=%.0fx%.0f@%.0f,%.0f) superview=%.0fx%.0f(sv frame=%.0fx%.0f@%.0f,%.0f) window=%.0fx%.0f sdl=%dx%d guestmap=%d(rect=%d,%d %dx%d fb=%dx%d) transform=[%.2f %.2f %.2f %.2f] svclass=%s fullscreen=%d", tag,
                    compositor_pixel_width, compositor_pixel_height,
                    ds.width, ds.height,
                    (double)compositor_layer.contentsScale,
@@ -387,6 +500,7 @@ static void MetalCompositorLogGeometry(const char *tag)
                    sf.size.width, sf.size.height, sf.origin.x, sf.origin.y,
                    wb.size.width, wb.size.height,
                    sdl_w, sdl_h,
+                   have_guest_map, grx, gry, grw, grh, gfbw, gfbh,
                    t.a, t.b, t.c, t.d,
                    sv ? [NSStringFromClass([sv class]) UTF8String] : "nil",
 #if TARGET_OS_MACCATALYST
@@ -414,6 +528,9 @@ extern "C" void MetalCompositorRefreshDrawableSize(void)
         MetalCompositorDrawableSize t = MetalCompositorCurrentDrawableSize(
             compositor_pixel_width, compositor_pixel_height);
         MetalCompositorSetDrawableSizePixels(t);
+        // Same pass: re-publish the unified guest map so drawable, rect,
+        // and fb dims are never observed mid-transition by either side.
+        MetalCompositorRefreshPresentRect();
         MetalCompositorLogGeometry("refresh");
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -423,6 +540,7 @@ extern "C" void MetalCompositorRefreshDrawableSize(void)
             MetalCompositorDrawableSize t = MetalCompositorCurrentDrawableSize(
                 compositor_pixel_width, compositor_pixel_height);
             MetalCompositorSetDrawableSizePixels(t);
+            MetalCompositorRefreshPresentRect();
             MetalCompositorLogGeometry("refresh");
         });
     }
@@ -1533,6 +1651,15 @@ void *MetalCompositorGetGammaIdentityBuffer(void)
 // MetalCompositorPresent — render one frame (2D framebuffer only)
 // ---------------------------------------------------------------------------
 
+// Nil-drawable streak counter shared between the early-out below and the
+// success path. File-local, single emul/main thread — no atomic needed.
+static uint32_t s_present_nil_streak = 0;
+
+static void MetalCompositorPresent_NoteSuccess(void)
+{
+    s_present_nil_streak = 0;
+}
+
 void MetalCompositorPresent(void)
 {
     if (!compositor_layer || !compositor_pipeline) return;
@@ -1590,8 +1717,26 @@ void MetalCompositorPresent(void)
 
     id<CAMetalDrawable> drawable = [compositor_layer nextDrawable];
     if (!drawable) {
+        // Throttled nil-drawable diagnosis: after a background/foreground
+        // cycle with a zero drawable, Present spins here forever (frozen
+        // frame, guest software cursor stops). Count consecutive misses and
+        // report rarely so the log pinpoints the stuck state without spam.
+        // Reset to zero on the next successful present (single emul/main
+        // thread, so the file-local counter needs no atomic).
+        s_present_nil_streak++;
+        if (s_present_nil_streak == 1 || s_present_nil_streak == 60 ||
+            (s_present_nil_streak % 600u) == 0) {
+            CGSize ds = compositor_layer.drawableSize;
+            COMPOSITOR_ERR("MetalCompositorPresent: nextDrawable nil (streak=%u drawable=%.0fx%.0f fb=%dx%d) — "
+                           "drawable still zero after foreground restore?", s_present_nil_streak,
+                           ds.width, ds.height,
+                           compositor_pixel_width, compositor_pixel_height);
+        }
         return;
     }
+    // Success: clear the streak. Hoisted helper keeps the reset next to the
+    // counter without duplicating its declaration.
+    MetalCompositorPresent_NoteSuccess();
 
     // Render pass: clear to black, draw fullscreen triangle sampling framebuffer
     MTLRenderPassDescriptor *passDesc = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1825,6 +1970,15 @@ int MetalCompositorResize(int width, int height, int depth, int row_bytes,
     // cached layer scale (applied on the main thread at Init / pinning
     // changes) so the drawable stays in physical pixels.
     MetalCompositorSetDrawableSizePixels(target_size);
+    // Re-stamp the unified guest map with the new fb dims so the mouse map
+    // (which reads rect+fb atomically) can never pair this mode's drawable
+    // with the previous mode's dims. The full rect+drawable re-sync follows
+    // on the main thread via RefreshDrawableSize.
+    {
+        int resize_fb_h = (int)new_resources.texture.height;
+        if (resize_fb_h <= 0) resize_fb_h = height;
+        MetalCompositorPublishGuestMapForResize(width, resize_fb_h);
+    }
     COMPOSITOR_ERR("CompositorGeometry resize: fb=%dx%d drawable=%.0fx%.0f scale=%.2f", width, height,
                    compositor_layer.drawableSize.width, compositor_layer.drawableSize.height,
                    (double)compositor_layer.contentsScale);

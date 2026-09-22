@@ -421,8 +421,24 @@ static void                   *s_dsp_background_hook_ctx = NULL;
 static GfxAccelLifecycleHookFn s_dsp_foreground_hook     = NULL;
 static void                   *s_dsp_foreground_hook_ctx = NULL;
 
+// Lifecycle re-entrancy guard. didEnterBackground/willEnterForeground can
+// fire redundantly on Catalyst (focus loss, fullscreen transitions) without
+// a matching counterpart. Without this, a duplicate background_enter zeroes
+// the drawable while foreground already restored it, or a stray foreground
+// unpauses VBL before any restore. Main thread only (matches the Swift
+// observer queue), so plain int is sufficient.
+static int s_in_background = 0;
+
 extern "C" void gfxaccel_handle_background_enter(void)
 {
+	// Ignore redundant enters: a second zeroing after foreground restored
+	// the drawable would leave Present in a nil-drawable loop.
+	if (s_in_background) {
+		fprintf(stderr, "[gfxaccel_lifecycle] background_enter: already in background (duplicate ignored)\n");
+		return;
+	}
+	s_in_background = 1;
+	fprintf(stderr, "[gfxaccel_lifecycle] background_enter: pausing VBL and releasing drawables\n");
 	// Step 1: Pause VBLSource (stop display link callbacks).
 	vbl_source_set_paused(1);
 
@@ -455,14 +471,30 @@ extern "C" void gfxaccel_handle_background_enter(void)
 
 extern "C" void gfxaccel_handle_foreground_enter(void)
 {
+	// Ignore stray foregrounds with no matching background: unpausing VBL
+	// here would resume Present against a drawable another path owns.
+	if (!s_in_background) {
+		return;
+	}
 	// Step 1: Restore drawableSize in physical pixels (scale-aware).
 	// The old code restored raw snapshot points, which presents as a
 	// bottom-left quad on Retina. Refresh re-applies the live backing
-	// scale and recomputes from the current framebuffer (hops to main).
-	MetalCompositorRefreshDrawableSize();
+	// scale and recomputes from the current framebuffer.
+	// Ordering: restore SYNCHRONOUSLY before unpausing VBL. The async hop
+	// inside Refresh lets the first VBL tick run against a zero drawable
+	// (nextDrawable=nil -> frozen frame, guest software cursor stops).
+	if ([NSThread isMainThread]) {
+		MetalCompositorRefreshDrawableSize();
+	} else {
+		dispatch_sync(dispatch_get_main_queue(), ^{
+			MetalCompositorRefreshDrawableSize();
+		});
+	}
+	fprintf(stderr, "[gfxaccel_lifecycle] foreground_enter: drawable restored, resuming VBL\n");
 
 	// Step 2: Resume VBLSource.
 	vbl_source_set_paused(0);
+	s_in_background = 0;
 
 	// Step 3: Invoke DSp M2 foreground hook if registered (NULL initially).
 	if (s_dsp_foreground_hook != NULL) {

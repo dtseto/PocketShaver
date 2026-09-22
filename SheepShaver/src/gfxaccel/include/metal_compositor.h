@@ -409,9 +409,17 @@ void *MetalCompositorGetGammaIdentityBuffer(void);
  * on_sdl_event_generated). MetalCompositorGetPresentRect returns the last cached
  * rect from any thread (size 0 before the first refresh — caller should fall
  * back to an identity map).
+ *
+ * Unified guest map (cursor-split fix): rect + fb dims published atomically
+ * from the same pass that sizes the drawable, so the Catalyst mouse bypass
+ * can never pair a fresh rect with stale fb dims. Preferred over
+ * GetPresentRect + VIDEO_MODE_X/Y whenever available; falls back to the
+ * legacy pair before the first publish.
  */
 void MetalCompositorRefreshPresentRect(void);
 void MetalCompositorGetPresentRect(int *out_x, int *out_y, int *out_w, int *out_h);
+int MetalCompositorGetGuestMap(int *out_rx, int *out_ry, int *out_rw, int *out_rh,
+                               int *out_fb_w, int *out_fb_h);
 
 
 #ifdef __cplusplus

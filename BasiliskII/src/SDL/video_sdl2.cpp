@@ -2777,9 +2777,31 @@ extern "C" void VideoMapWindowPointToGuestAndMove(double winX, double winY)
 	// generates no motion events (its transposed view ends early), so
 	// on_sdl_event_generated wouldn't otherwise keep the rect current there.
 	MetalCompositorRefreshPresentRect();
+	// Unified guest map (cursor-split fix): rect + fb dims from the same
+	// atomic publish the render-side fit uses — never a fresh rect with
+	// stale fb dims across a fullscreen/mode-switch transient.
+	int fb_w = 0, fb_h = 0;
 	int rx = 0, ry = 0, rw = 0, rh = 0;
+	if (MetalCompositorGetGuestMap(&rx, &ry, &rw, &rh, &fb_w, &fb_h)) {
+		// Aspect-FIT (letterbox) to match the compositor viewport in both
+		// windowed and full screen: the offset centres the guest and the
+		// clamp handles the letterbox bars.
+		float mag = std::min((float)rw / fb_w, (float)rh / fb_h);
+		if (mag <= 0.f) return;
+		float ox = rx + (rw - fb_w * mag) * 0.5f;
+		float oy = ry + (rh - fb_h * mag) * 0.5f;
+		int fx = (int)(((float)winX - ox) / mag);
+		int fy = (int)(((float)winY - oy) / mag);
+		if (fx < 0) fx = 0;
+		if (fy < 0) fy = 0;
+		if (fx >= fb_w) fx = fb_w - 1;
+		if (fy >= fb_h) fy = fb_h - 1;
+		ADBMouseMoved(fx, fy);
+		return;
+	}
 	MetalCompositorGetPresentRect(&rx, &ry, &rw, &rh);
 	if (rw <= 0 || rh <= 0) return;
+	// Legacy fallback before the first unified publish: rect + VIDEO_MODE.
 	// Aspect-FIT (letterbox) to match the compositor (kCAGravityResizeAspect) in both windowed
 	// and full screen: the offset centres the guest and the clamp handles the letterbox bars.
 	float mag = std::min((float)rw / drv->VIDEO_MODE_X,
