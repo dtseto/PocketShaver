@@ -217,6 +217,15 @@ int MetalCompositorResize(int width, int height, int depth, int row_bytes,
                           int pitch, void *buffer, uint32_t buffer_size);
 
 /*
+ * Re-read the live display scale and recompute the layer drawable in
+ * physical pixels. Main-thread entry (hops there when called off-main).
+ * Call after window fullscreen transitions, display changes, and
+ * foreground-enter so a stale points-sized drawable never presents as a
+ * bottom-left quad on Retina.
+ */
+void MetalCompositorRefreshDrawableSize(void);
+
+/*
  * Query whether the compositor has been successfully initialized.
  *
  * Returns 1 if MetalCompositorInit completed successfully and

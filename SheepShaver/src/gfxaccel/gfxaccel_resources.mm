@@ -455,16 +455,11 @@ extern "C" void gfxaccel_handle_background_enter(void)
 
 extern "C" void gfxaccel_handle_foreground_enter(void)
 {
-	// Step 1: Restore drawableSize to current DMC snapshot dimensions.
-	void *layerPtr = MetalCompositorGetLayer();
-	if (layerPtr != NULL) {
-		const struct DMCModeSnapshot *snap = dmc_current_snapshot();
-		if (snap != NULL && snap->width > 0 && snap->height > 0) {
-			CAMetalLayer *layer = (__bridge CAMetalLayer *)layerPtr;
-			layer.drawableSize = CGSizeMake((CGFloat)snap->width,
-			                                (CGFloat)snap->height);
-		}
-	}
+	// Step 1: Restore drawableSize in physical pixels (scale-aware).
+	// The old code restored raw snapshot points, which presents as a
+	// bottom-left quad on Retina. Refresh re-applies the live backing
+	// scale and recomputes from the current framebuffer (hops to main).
+	MetalCompositorRefreshDrawableSize();
 
 	// Step 2: Resume VBLSource.
 	vbl_source_set_paused(0);

@@ -25,7 +25,9 @@
  *    - newBufferWithBytesNoCopy for zero-copy GPU access to the_buffer.
  *    - Fullscreen triangle (3 vertices via vertex_id, no vertex buffer).
  *    - Drawables are never cached across frames.
- *    - CAMetalLayer.drawableSize = Mac framebuffer dimensions, not UIView frame.
+ *    - CAMetalLayer.drawableSize = view backing size (view points x
+ *      contentsScale), presented 1:1; the guest is letterboxed into it via
+ *      the render-pass viewport (aspect-fit), not layer gravity.
  *    - Integer textures (R8Uint, R16Uint) use tex.read() in shaders — not
  *      tex.sample(). CAMetalLayer min/magnificationFilter provides scaling.
  */
@@ -152,9 +154,11 @@ static bool                         compositor_initialized = false;
 // disagree.
 //
 // We publish the view rect in WINDOW coordinates (the space SDL mouse events
-// use). video_sdl2 applies the aspect-FILL map within it using the guest dims
-// (matching the layer's kCAGravityResizeAspectFill), clamping at the cropped
-// edges. Read on the main thread (Refresh, pumped from on_sdl_event_generated),
+// use). video_sdl2 applies the aspect-FIT letterbox map within it using the
+// guest dims (matching the compositor's aspect-fit: the drawable is view-sized
+// and the guest is confined to the fit rect via the render-pass viewport, with
+// the clear color filling the bars). Read on the main thread (Refresh, pumped
+// from on_sdl_event_generated),
 // published into two atomics the redraw thread reads (Get); x:y and w:h packed
 // so neither pair tears.
 // ---------------------------------------------------------------------------
@@ -276,20 +280,184 @@ extern "C" int  MetalCompositorSubmitFrame_BindPresentationContext(
 extern "C" void MetalCompositorSubmitFrame_UnbindPresentationContext(void);
 extern "C" void MetalCompositorSubmitFrame_SetFramebufferTexture(void *texture);
 
+// Cached view size in points, written on the main thread (Refresh/pin entry)
+// and read from any thread (Resize on the emulation thread must not touch
+// UIView). The drawable then matches the live view backing size, so a
+// fullscreen window larger than the guest gets an upscaled full-window image
+// instead of a framebuffer-sized bottom-left quad.
+static _Atomic int s_view_points_w = 0;
+static _Atomic int s_view_points_h = 0;
+
+static void MetalCompositorCacheViewSizePoints(void)
+{
+    if (![NSThread isMainThread]) return;
+    if (!compositor_view) return;
+    CGRect vb = compositor_view.bounds;
+    if (vb.size.width > 0.0 && vb.size.height > 0.0) {
+        atomic_store_explicit(&s_view_points_w, (int)(vb.size.width + 0.5),
+                              memory_order_relaxed);
+        atomic_store_explicit(&s_view_points_h, (int)(vb.size.height + 0.5),
+                              memory_order_relaxed);
+    }
+}
+
 static MetalCompositorDrawableSize MetalCompositorCurrentDrawableSize(int framebuffer_width,
                                                                       int framebuffer_height)
 {
-    UIWindow *uiWindow = GetSDLUIWindow();
-    int view_width = 0;
-    int view_height = 0;
-    if (uiWindow) {
-        view_width = (int)(uiWindow.bounds.size.width + 0.5);
-        view_height = (int)(uiWindow.bounds.size.height + 0.5);
+    // Prefer the cached view size (points); SetDrawableSizePixels applies the
+    // live contentsScale to reach physical pixels. Falls back to the
+    // framebuffer size before the first main-thread cache (== windowed, where
+    // the window matches the guest so both agree).
+    int view_width = atomic_load_explicit(&s_view_points_w, memory_order_relaxed);
+    int view_height = atomic_load_explicit(&s_view_points_h, memory_order_relaxed);
+    if (view_width <= 0 || view_height <= 0) {
+        UIWindow *uiWindow = GetSDLUIWindow();
+        if (uiWindow) {
+            view_width = (int)(uiWindow.bounds.size.width + 0.5);
+            view_height = (int)(uiWindow.bounds.size.height + 0.5);
+        }
     }
     return MetalCompositorTargetDrawableSize(framebuffer_width,
                                              framebuffer_height,
                                              view_width,
                                              view_height);
+}
+
+// drawableSize is in physical pixels (view points x contentsScale). Never
+// publish a zero area (CAMetalLayer ignores 0x0 and logs every time).
+static CGFloat MetalCompositorLiveBackingScale(void)
+{
+    UIWindow *w = GetSDLUIWindow();
+    CGFloat s = 0.0;
+    if (w && w.screen) {
+        s = w.screen.scale;
+    } else {
+        s = [UIScreen mainScreen].scale;
+    }
+    return (s > 0.0) ? s : 1.0;
+}
+
+static void MetalCompositorApplyBackingScale(void)
+{
+    if (!compositor_view || !compositor_layer) return;
+    CGFloat s = MetalCompositorLiveBackingScale();
+    compositor_view.contentScaleFactor = s;
+    compositor_layer.contentsScale = s;
+}
+
+static void MetalCompositorSetDrawableSizePixels(MetalCompositorDrawableSize target)
+{
+    if (!compositor_layer) return;
+    if (target.width <= 0 || target.height <= 0) return;
+    CGFloat s = compositor_layer.contentsScale;
+    if (s <= 0.0) s = 1.0;
+    compositor_layer.drawableSize =
+        CGSizeMake((CGFloat)target.width * s, (CGFloat)target.height * s);
+}
+
+// One-shot geometry report (always on): distinguishes a points-vs-pixels
+// drawable from a mis-sized/placed view. Main thread only (reads UIView
+// bounds); callers off the main thread must hop before calling.
+#if TARGET_OS_MACCATALYST
+// Defined in PreferencesViewControllerObjC.mm — true iff the app's NSWindow is full screen.
+extern "C" bool catalyst_is_window_fullscreen(void);
+#endif
+
+static void MetalCompositorLogGeometry(const char *tag)
+{
+    if (!tag || !compositor_view || !compositor_layer) return;
+    UIWindow *w = GetSDLUIWindow();
+    UIView *sv = compositor_view.superview;
+    CGRect vb = compositor_view.bounds;
+    CGRect vf = compositor_view.frame;
+    CGRect sb = sv ? sv.bounds : CGRectZero;
+    CGRect sf = sv ? sv.frame : CGRectZero;
+    CGRect wb = w ? w.bounds : CGRectZero;
+    CGSize ds = compositor_layer.drawableSize;
+    int sdl_w = 0, sdl_h = 0;
+    if (sdl_window) SDL_GetWindowSize(sdl_window, &sdl_w, &sdl_h);
+    CGAffineTransform t = compositor_view.transform;
+    COMPOSITOR_ERR("CompositorGeometry %s: fb=%dx%d drawable=%.0fx%.0f scale=%.2f view=%.0fx%.0f(view frame=%.0fx%.0f@%.0f,%.0f) superview=%.0fx%.0f(sv frame=%.0fx%.0f@%.0f,%.0f) window=%.0fx%.0f sdl=%dx%d transform=[%.2f %.2f %.2f %.2f] svclass=%s fullscreen=%d", tag,
+                   compositor_pixel_width, compositor_pixel_height,
+                   ds.width, ds.height,
+                   (double)compositor_layer.contentsScale,
+                   vb.size.width, vb.size.height,
+                   vf.size.width, vf.size.height, vf.origin.x, vf.origin.y,
+                   sb.size.width, sb.size.height,
+                   sf.size.width, sf.size.height, sf.origin.x, sf.origin.y,
+                   wb.size.width, wb.size.height,
+                   sdl_w, sdl_h,
+                   t.a, t.b, t.c, t.d,
+                   sv ? [NSStringFromClass([sv class]) UTF8String] : "nil",
+#if TARGET_OS_MACCATALYST
+                   (int)catalyst_is_window_fullscreen()
+#else
+                   -1
+#endif
+                   );
+}
+
+// Main-thread entry: re-read the live display scale (window may have moved
+// screens), re-apply it to view+layer, and recompute the drawable in
+// physical pixels. Safe to call any time after Init; no-op before that.
+// Hops to the main queue when called off-main because contentScaleFactor
+// is a UIView property.
+extern "C" void MetalCompositorRefreshDrawableSize(void)
+{
+    if (!compositor_initialized) return;
+    if ([NSThread isMainThread]) {
+        MetalCompositorApplyBackingScale();
+        // Force layout first so bounds reflect a just-completed fullscreen
+        // transition/pin; then cache and size the drawable from them.
+        [compositor_view.superview layoutIfNeeded];
+        MetalCompositorCacheViewSizePoints();
+        MetalCompositorDrawableSize t = MetalCompositorCurrentDrawableSize(
+            compositor_pixel_width, compositor_pixel_height);
+        MetalCompositorSetDrawableSizePixels(t);
+        MetalCompositorLogGeometry("refresh");
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MetalCompositorApplyBackingScale();
+            [compositor_view.superview layoutIfNeeded];
+            MetalCompositorCacheViewSizePoints();
+            MetalCompositorDrawableSize t = MetalCompositorCurrentDrawableSize(
+                compositor_pixel_width, compositor_pixel_height);
+            MetalCompositorSetDrawableSizePixels(t);
+            MetalCompositorLogGeometry("refresh");
+        });
+    }
+}
+
+// Aspect-fit rect of the guest framebuffer inside a drawable (pixels).
+// The drawable is view-sized (see drawable policy), so when the window aspect
+// differs from the guest aspect the underlay must be confined to this rect —
+// CAMetalLayer presents the drawable 1:1, so letterboxing happens here via
+// the render-pass viewport, not via layer gravity. Returns the full drawable
+// when sizes are unknown or aspects already match (== windowed: viewport then
+// equals the default and rendering is unchanged).
+static void MetalCompositorFitRect(NSUInteger drawable_width,
+                                   NSUInteger drawable_height,
+                                   double *out_x, double *out_y,
+                                   double *out_w, double *out_h)
+{
+    double dw = (double)drawable_width, dh = (double)drawable_height;
+    int fb_width = compositor_pixel_width;
+    int fb_height = compositor_texture ? (int)[compositor_texture height] : 0;
+    if (fb_height <= 0) {
+        fb_height = compositor_pixel_height;
+    }
+    double fw = (double)fb_width, fh = (double)fb_height;
+    if (dw <= 0.0 || dh <= 0.0 || fw <= 0.0 || fh <= 0.0) {
+        if (out_x) *out_x = 0.0; if (out_y) *out_y = 0.0;
+        if (out_w) *out_w = dw;  if (out_h) *out_h = dh;
+        return;
+    }
+    double s = (dw / fw < dh / fh) ? dw / fw : dh / fh;
+    double w = fw * s, h = fh * s;
+    if (out_x) *out_x = (dw - w) * 0.5;
+    if (out_y) *out_y = (dh - h) * 0.5;
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
 }
 
 static void MetalCompositorScaleLayerToDrawable(struct CompositeLayer *layer,
@@ -300,22 +468,23 @@ static void MetalCompositorScaleLayerToDrawable(struct CompositeLayer *layer,
 
     int fb_width = compositor_pixel_width;
     int fb_height = compositor_texture ? (int)[compositor_texture height] : 0;
-    if (fb_height <= 0 && compositor_layer) {
-        fb_height = (int)compositor_layer.drawableSize.height;
+    if (fb_height <= 0) {
+        fb_height = compositor_pixel_height;
     }
     if (fb_width <= 0 || fb_height <= 0) return;
 
-    if ((NSUInteger)fb_width == drawable_width &&
-        (NSUInteger)fb_height == drawable_height) {
-        return;
-    }
-
-    const float sx = (float)drawable_width / (float)fb_width;
-    const float sy = (float)drawable_height / (float)fb_height;
-    layer->dst_origin_x *= sx;
-    layer->dst_origin_y *= sy;
-    layer->dst_size_w *= sx;
-    layer->dst_size_h *= sy;
+    // Map the framebuffer-space dst rect into the aspect-fit rect (uniform
+    // scale + centering offset) so the overlay lands on the same letterboxed
+    // image as the underlay. Reduces to the old stretch math when the fit
+    // rect is the full drawable (aspects match, e.g. windowed).
+    double ox = 0.0, oy = 0.0, fw = 0.0, fh = 0.0;
+    MetalCompositorFitRect(drawable_width, drawable_height, &ox, &oy, &fw, &fh);
+    if (fw <= 0.0 || fh <= 0.0) return;
+    const float s = (float)(fw / (double)fb_width);
+    layer->dst_origin_x = (float)ox + layer->dst_origin_x * s;
+    layer->dst_origin_y = (float)oy + layer->dst_origin_y * s;
+    layer->dst_size_w *= s;
+    layer->dst_size_h *= s;
 
     if (s_last_overlay_scale_target_w != drawable_width ||
         s_last_overlay_scale_target_h != drawable_height ||
@@ -325,11 +494,12 @@ static void MetalCompositorScaleLayerToDrawable(struct CompositeLayer *layer,
         s_last_overlay_scale_target_h = drawable_height;
         s_last_overlay_scale_fb_w = fb_width;
         s_last_overlay_scale_fb_h = fb_height;
-        COMPOSITOR_LOG("MetalCompositorPresent: scaled cached overlay from framebuffer %dx%d to drawable %lux%lu (scale %.3fx%.3f)",
+        COMPOSITOR_LOG("MetalCompositorPresent: mapped cached overlay from framebuffer %dx%d to fit rect (%.0f,%.0f %.0fx%.0f in %lux%lu, scale %.3f)",
                        fb_width, fb_height,
+                       ox, oy, fw, fh,
                        (unsigned long)drawable_width,
                        (unsigned long)drawable_height,
-                       sx, sy);
+                       s);
     }
 }
 
@@ -750,46 +920,72 @@ static void compositor_vbl_callback(void *ctx, void *drawable, double target_ts)
 }
 
 // ---------------------------------------------------------------------------
-// MetalCompositorPinViewToWindow (Mac Catalyst) — size the compositor view to its
-// superview's FULL bounds via Auto Layout (deliberately NOT the safe area): the guest image
+// MetalCompositorPinViewToWindow (Mac Catalyst) — size the compositor view to the
+// WINDOW bounds via Auto Layout (deliberately NOT the superview's bounds): the guest image
 // fills the whole window edge-to-edge, overscanning the Mac menu-bar / camera-housing strip
-// and the rounded screen corners, so there is no black border. Combined with the layer's
-// aspect-fill gravity, the overscan is cropped at those edges. On Catalyst the view runs with
+// and the rounded screen corners, so there is no black border. Combined with the
+// aspect-fit viewport letterbox, the fit rect is centered at those edges. On Catalyst the view runs with
 // translatesAutoresizingMaskIntoConstraints = NO, so it has NO size unless pinned. A mode
 // switch that re-homes the view into a fresh SDL rootViewController.view drops the previous
 // pin (it referenced the old superview), collapsing the view to 0x0 — a black desktop. Re-pin
 // on every re-home. Storing the constraints lets us deactivate the stale set first, so
 // re-pinning against an unchanged superview cannot stack duplicates. (iOS/iPad use the
 // autoresizing mask and are unaffected.)
+//
+// Why window-anchored: SDL's Catalyst container (SDL_uikitview) intermittently reports
+// TRANSPOSED bounds (portrait 900x1600 inside a landscape 1600x900 window — see the
+// CompositorGeometry log: sdl=900x1600 window=1600x900, transform identity). Pinning
+// edge-to-edge to that superview faithfully inherits the wrong size, and the aspect-fit
+// viewport then letterboxes the guest into a narrow strip. Anchoring width/height/center
+// to the window (always correct landscape) bypasses the transposition while keeping the
+// view inside the SDL container so z-order (index 0, under the overlay) is unchanged.
 // ---------------------------------------------------------------------------
 #if TARGET_OS_MACCATALYST
 static NSArray<NSLayoutConstraint *> *s_compositor_pin_constraints = nil;
 
-// Defined in PreferencesViewControllerObjC.mm — true iff the app's NSWindow is full screen.
-extern "C" bool catalyst_is_window_fullscreen(void);
+static void MetalCompositorUnclipAncestorsToWindow(UIView *view)
+{
+    // The window-anchored view is larger than its transposed superview; keep
+    // every ancestor up to (not including) the window from clipping it.
+    // clipsToBounds defaults to NO on plain UIViews, so this is a no-op
+    // unless SDL or an intermediate container enables clipping.
+    UIView *v = view.superview;
+    while (v && ![v isKindOfClass:[UIWindow class]]) {
+        v.clipsToBounds = NO;
+        v = v.superview;
+    }
+}
 
 static void MetalCompositorPinViewToWindow(void)
 {
     if (!compositor_view || !compositor_view.superview) return;
+    UIWindow *window = GetSDLUIWindow();
+    if (!window) return;
     if (s_compositor_pin_constraints) {
         [NSLayoutConstraint deactivateConstraints:s_compositor_pin_constraints];
         s_compositor_pin_constraints = nil;
     }
     compositor_view.translatesAutoresizingMaskIntoConstraints = NO;
+    MetalCompositorUnclipAncestorsToWindow(compositor_view);
     UIView *superview = compositor_view.superview;
     // Full screen fills the whole window edge-to-edge (top = window top, overscanning the
-    // notch). Windowed keeps the title bar: pin the TOP to the safe-area guide, whose top
-    // inset is the title-bar height in a windowed Mac window (sides/bottom have no inset in
-    // either mode, so they pin to the window edges). Re-pinned on full-screen changes via
-    // MetalCompositorReapplyWindowPinning.
+    // notch). Windowed keeps the title bar: offset the center-Y by half the safe-area top
+    // inset (the title-bar height in a windowed Mac window), matching the old
+    // safe-area-top pin. Sides/bottom span the window edges in both modes (no inset there).
+    // Re-pinned on full-screen changes via MetalCompositorReapplyWindowPinning.
+    // NOTE: cross-hierarchy constraints (view <-> window) require a shared ancestor;
+    // the view lives inside the SDL container inside this same window, so this is legal.
+    // If the superview is ever re-homed outside this window, constraint creation throws —
+    // callers re-home into this window's container first (Init/Resize), so don't add here.
     BOOL fullscreen = catalyst_is_window_fullscreen();
-    NSLayoutYAxisAnchor *topAnchor = fullscreen ? superview.topAnchor
-                                                 : superview.safeAreaLayoutGuide.topAnchor;
+    CGFloat topInset = fullscreen ? 0.0 : superview.safeAreaInsets.top;
     NSArray<NSLayoutConstraint *> *pins = @[
-        [compositor_view.topAnchor      constraintEqualToAnchor:topAnchor],
-        [compositor_view.leadingAnchor  constraintEqualToAnchor:superview.leadingAnchor],
-        [compositor_view.trailingAnchor constraintEqualToAnchor:superview.trailingAnchor],
-        [compositor_view.bottomAnchor   constraintEqualToAnchor:superview.bottomAnchor],
+        [compositor_view.widthAnchor  constraintEqualToAnchor:window.widthAnchor],
+        [compositor_view.heightAnchor constraintEqualToAnchor:window.heightAnchor
+                                                     constant:-topInset],
+        [compositor_view.centerXAnchor constraintEqualToAnchor:window.centerXAnchor],
+        [compositor_view.centerYAnchor constraintEqualToAnchor:window.centerYAnchor
+                                                     constant:topInset * 0.5],
     ];
     [NSLayoutConstraint activateConstraints:pins];
     s_compositor_pin_constraints = pins;
@@ -829,10 +1025,12 @@ extern "C" void MetalCompositorReapplyWindowPinning(void)
     if ([NSThread isMainThread]) {
         MetalCompositorPinViewToWindow();
         MetalCompositorApplyLetterboxColor();
+        MetalCompositorRefreshDrawableSize();
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
             MetalCompositorPinViewToWindow();
             MetalCompositorApplyLetterboxColor();
+            MetalCompositorRefreshDrawableSize();
         });
     }
 }
@@ -904,32 +1102,22 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
     compositor_layer = (CAMetalLayer *)compositor_view.layer;
-#if TARGET_OS_MACCATALYST
-    // On iOS UIKit gives the view/layer the screen's backing scale (2 on Retina)
-    // automatically; on Mac Catalyst they come up at 1.0 even on a 2x screen, so
-    // the CAMetalLayer composites the guest at 1x and the window server then
-    // upscales to physical pixels with linear filtering → blur. Detect the live
-    // backing scale (read fresh from the window's screen — never hardcoded) and
-    // apply it, so the layer renders at native pixels and its own magnification
-    // filter (nearest, per scale_nearest) does the crisp HiDPI upscale instead.
-    {
-        CGFloat backingScale = uiWindow.screen.scale;
-        if (backingScale > 0.0) {
-            compositor_view.contentScaleFactor = backingScale;
-            compositor_layer.contentsScale = backingScale;
-        }
-    }
-#endif
+    // Backing scale: on iOS UIKit provisions view/layer at the screen scale
+    // automatically; on Mac Catalyst they come up at 1.0 on a 2x screen, so
+    // apply the live scale or the layer composites at 1x (blurry, and a
+    // points-sized drawable in a Retina view reads as a bottom-left quad).
+    MetalCompositorApplyBackingScale();
     compositor_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     compositor_layer.device = compositor_device;
     compositor_layer.maximumDrawableCount = 3;         // triple buffering
     compositor_layer.framebufferOnly = YES;
     MetalCompositorDrawableSize target_size =
         MetalCompositorCurrentDrawableSize(width, height);
-    compositor_layer.drawableSize = CGSizeMake(target_size.width, target_size.height);
-    // Always aspect-fit (letterbox) so the whole guest shows and is never cropped offscreen —
-    // full screen and windowed alike. The letterbox colour differs by mode (see above).
-    compositor_layer.contentsGravity = kCAGravityResizeAspect;
+    MetalCompositorSetDrawableSizePixels(target_size);
+    // Letterboxing is done in-shader via the render-pass viewport (aspect-fit),
+    // so the layer must not add its own scaling: 1:1 pixels. The letterbox
+    // colour differs by mode (see above).
+    compositor_layer.contentsGravity = kCAGravityTopLeft;
 
     // --- CAMetalLayer scaling filter from user preference ---
     bool useNearest = PrefsFindBool("scale_nearest");
@@ -948,10 +1136,11 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
         if (cs) CGColorSpaceRelease(cs);
     }
 
-    COMPOSITOR_LOG("View created: layer=%p view=%p framebuffer=%dx%d drawableSize=%dx%d windowBounds=%.0fx%.0f",
+    COMPOSITOR_LOG("View created: layer=%p view=%p framebuffer=%dx%d drawableSize=%.0fx%.0f scale=%.2f windowBounds=%.0fx%.0f",
                    compositor_layer, compositor_view,
                    width, height,
-                   target_size.width, target_size.height,
+                   compositor_layer.drawableSize.width, compositor_layer.drawableSize.height,
+                   (double)compositor_layer.contentsScale,
                    uiWindow.bounds.size.width, uiWindow.bounds.size.height);
 
     // --- Zero-copy shared buffer wrapping the_buffer ---
@@ -1196,11 +1385,15 @@ int MetalCompositorInit(int width, int height, int depth, int row_bytes,
         // Now that the compositor is in a view hierarchy (a common ancestor
         // exists), pin it to its superview's FULL bounds so the guest desktop fills the
         // whole window edge-to-edge (overscanning the Mac menu bar / camera housing and the
-        // rounded corners; the aspect-fill gravity crops the overscan). MUST run post-insert:
+        // rounded corners; the aspect-fit viewport letterboxes inside). MUST run post-insert:
         // cross-view constraints require a shared hierarchy. The matching re-pin
         // in MetalCompositorResize keeps this alive across mode-switch re-homes.
         MetalCompositorPinViewToWindow();
 #endif
+        // Layout now has a common ancestor: force a pass so bounds are real,
+        // then refresh scale+drawable against them and report geometry.
+        [compositor_view.superview layoutIfNeeded];
+        MetalCompositorRefreshDrawableSize();
     }
 
     // Subscribe to DMC FIRST:
@@ -1413,6 +1606,28 @@ void MetalCompositorPresent(void)
     id<MTLRenderCommandEncoder> enc = [cmdBuf renderCommandEncoderWithDescriptor:passDesc];
     if (!enc) return;
 
+    // Letterbox the underlay into the aspect-fit rect: the drawable is
+    // view-sized, so when the window aspect differs from the guest aspect the
+    // fullscreen triangle must rasterize only the fit rect (clear color fills
+    // the bars). When aspects match the fit rect IS the full drawable and the
+    // viewport equals the default (no behavior change — windowed path).
+    {
+        double fx = 0.0, fy = 0.0, fw = 0.0, fh = 0.0;
+        MetalCompositorFitRect((NSUInteger)drawable.texture.width,
+                               (NSUInteger)drawable.texture.height,
+                               &fx, &fy, &fw, &fh);
+        double dw = (double)drawable.texture.width;
+        double dh = (double)drawable.texture.height;
+        if (fw > 0.0 && fh > 0.0 &&
+            (fx != 0.0 || fy != 0.0 || fw != dw || fh != dh)) {
+            MTLViewport vp;
+            vp.originX = fx; vp.originY = fy;
+            vp.width = fw;  vp.height = fh;
+            vp.znear = 0.0; vp.zfar = 1.0;
+            [enc setViewport:vp];
+        }
+    }
+
     [enc setRenderPipelineState:compositor_pipeline];
     [enc setFragmentTexture:compositor_texture atIndex:0];
 
@@ -1606,9 +1821,15 @@ int MetalCompositorResize(int width, int height, int depth, int row_bytes,
     compositor_sampler = new_resources.sampler;
 
     // --- Update layer state only after the resource swap is safe.
-    compositor_layer.drawableSize = CGSizeMake(target_size.width, target_size.height);
-    // Always aspect-fit (letterbox); full screen and windowed alike (see MetalCompositorInit).
-    compositor_layer.contentsGravity = kCAGravityResizeAspect;
+    // Resize runs on the emulation thread: no UIView work here. Reuse the
+    // cached layer scale (applied on the main thread at Init / pinning
+    // changes) so the drawable stays in physical pixels.
+    MetalCompositorSetDrawableSizePixels(target_size);
+    COMPOSITOR_ERR("CompositorGeometry resize: fb=%dx%d drawable=%.0fx%.0f scale=%.2f", width, height,
+                   compositor_layer.drawableSize.width, compositor_layer.drawableSize.height,
+                   (double)compositor_layer.contentsScale);
+    // Letterboxing is via the render-pass viewport; keep the layer at 1:1.
+    compositor_layer.contentsGravity = kCAGravityTopLeft;
     compositor_layer.minificationFilter = useNearest ? kCAFilterNearest : kCAFilterLinear;
     compositor_layer.magnificationFilter = useNearest ? kCAFilterNearest : kCAFilterLinear;
 
@@ -1623,11 +1844,12 @@ int MetalCompositorResize(int width, int height, int depth, int row_bytes,
     MetalCompositorSubmitFrame_SetFramebufferTexture(
         (__bridge void *)compositor_texture);
 
-    COMPOSITOR_LOG("MetalCompositorResize: %dx%d depth=%d → framebuffer=%dx%d drawable=%dx%d depth=%d (%dbpp) "
+    COMPOSITOR_LOG("MetalCompositorResize: %dx%d depth=%d → framebuffer=%dx%d drawable=%.0fx%.0f scale=%.2f depth=%d (%dbpp) "
                    "format=%s shader=%s filter=%s%s",
                    old_width, old_height, old_depth,
                    width, height,
-                   target_size.width, target_size.height,
+                   compositor_layer.drawableSize.width, compositor_layer.drawableSize.height,
+                   (double)compositor_layer.contentsScale,
                    depth, compositor_bits_per_pixel,
                    texture_format_name(new_resources.tex_format),
                    [new_resources.fragment_name UTF8String],
@@ -1735,6 +1957,8 @@ void MetalCompositorShutdown(void)
     compositor_depth    = 0;
     compositor_pixel_width   = 0;
     compositor_pixel_height  = 0;
+    atomic_store_explicit(&s_view_points_w, 0, memory_order_relaxed);
+    atomic_store_explicit(&s_view_points_h, 0, memory_order_relaxed);
     compositor_bits_per_pixel = 0;
     compositor_row_bytes = 0;
     compositor_pitch = 0;
