@@ -374,6 +374,7 @@ extension UIViewController {
 		childVC.willMove(toParent: self)
 
 		addChild(childVC)
+		childVC.view.translatesAutoresizingMaskIntoConstraints = false
 		view.addSubview(childVC.view)
 
 		NSLayoutConstraint.activate([
