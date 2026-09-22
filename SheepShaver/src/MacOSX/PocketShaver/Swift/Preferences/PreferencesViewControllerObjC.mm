@@ -329,7 +329,15 @@ void objc_displayPreferencesStartup(void) {
 }
 
 void objc_displayPreferencesDuringEmulationOnMain(void) {
-	dispatch_sync(dispatch_get_main_queue(), ^{
+	// on_sdl_event_generated() runs on the thread that pumped SDL events —
+	// on iOS/Catalyst that is the emulator/main thread (HandleInterrupt calls
+	// SDL_PumpEvents). dispatch_sync to main from main deadlocks, freezing
+	// the app with a live guest behind a dead UI. Fast-path when already main.
+	if ([NSThread isMainThread]) {
 		[LocalNotificationObjCProxy sendDisplayPreferencesRequested];
-	});
+	} else {
+		dispatch_sync(dispatch_get_main_queue(), ^{
+			[LocalNotificationObjCProxy sendDisplayPreferencesRequested];
+		});
+	}
 }
