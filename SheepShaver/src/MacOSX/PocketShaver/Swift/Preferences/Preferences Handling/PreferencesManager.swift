@@ -30,7 +30,10 @@ class PreferencesManager {
 		objc_replaceString("screen", screenString)
 
 		objc_replaceString("sdlrender", "metal")
-		objc_replaceString("extfs", FileManager.documentUrl.path)
+		// Shared UNIX folder (extfs): custom path when set, else Documents.
+		// The manager resolves the iOS security-scoped bookmark and holds
+		// access for the emulation session.
+		objc_replaceString("extfs", UnixSharedFolderManager.shared.prepareForEmulatorLaunch())
 
 		// PowerPC-to-native JIT (Mac Catalyst only; the core ignores the pref
 		// on hosts built without the compiler)

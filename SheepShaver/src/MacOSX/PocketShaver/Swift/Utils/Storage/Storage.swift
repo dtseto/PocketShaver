@@ -19,6 +19,7 @@ class Storage {
 		case informationConsumption
 		case diskConfig
 		case network
+		case unixSharedFolder
 	}
 
 	init() {

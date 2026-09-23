@@ -96,6 +96,7 @@
 		C707D04A2F26583C007BFE66 /* PreferencesRelativeMouseModeOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = C707D0492F265838007BFE66 /* PreferencesRelativeMouseModeOnboarding.swift */; };
 		C707D04D2F266B80007BFE66 /* PreferencesTwoFingerSteeringOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = C707D04C2F266B6D007BFE66 /* PreferencesTwoFingerSteeringOnboarding.swift */; };
 		C70B65E52E7A7BEA0039680A /* MiscellaneousSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70B65E42E7A7BE40039680A /* MiscellaneousSettings.swift */; };
+		C9ACF187028044D389C583F5 /* UnixSharedFolderManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C77E0159DE0F428ABE5D24B9 /* UnixSharedFolderManager.swift */; };
 		C70F32732ECB76920079A3D4 /* LinkLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70F32722ECB76900079A3D4 /* LinkLabel.swift */; };
 		C71F9B162E3A1D010088601A /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71F9B152E3A1CFE0088601A /* Storage.swift */; };
 		C72739C92E2BAA6500B1F165 /* HiddenInputFieldKeyboardAccessoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C72739C82E2BAA5E00B1F165 /* HiddenInputFieldKeyboardAccessoryView.swift */; };
@@ -698,6 +699,7 @@
 		C707D0492F265838007BFE66 /* PreferencesRelativeMouseModeOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesRelativeMouseModeOnboarding.swift; sourceTree = "<group>"; };
 		C707D04C2F266B6D007BFE66 /* PreferencesTwoFingerSteeringOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesTwoFingerSteeringOnboarding.swift; sourceTree = "<group>"; };
 		C70B65E42E7A7BE40039680A /* MiscellaneousSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiscellaneousSettings.swift; sourceTree = "<group>"; };
+		C77E0159DE0F428ABE5D24B9 /* UnixSharedFolderManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixSharedFolderManager.swift; sourceTree = "<group>"; };
 		C70F32702ECAF8CE0079A3D4 /* audio_sdl.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = audio_sdl.h; sourceTree = "<group>"; };
 		C70F32722ECB76900079A3D4 /* LinkLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkLabel.swift; sourceTree = "<group>"; };
 		C71F9B152E3A1CFE0088601A /* Storage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage.swift; sourceTree = "<group>"; };
@@ -1928,6 +1930,7 @@
 				C79D22FE2F3F7C8C00D54A4C /* Network */,
 				C707D03D2F24DBB5007BFE66 /* Information consumption */,
 				C7CF606A2FA0776800D39886 /* Gamepad Thumbnail Cache */,
+				2813E2D5531A4A38B375401C /* Unix Shared Folder */,
 			);
 			path = "Models and Persistence";
 			sourceTree = "<group>";
@@ -2099,6 +2102,14 @@
 				C795CDE12F0CF71900B0DAF6 /* MouseHapticFeedbackObjCCppHeader.h */,
 			);
 			path = "Mouse Haptic Feedback";
+			sourceTree = "<group>";
+		};
+		2813E2D5531A4A38B375401C /* Unix Shared Folder */ = {
+			isa = PBXGroup;
+			children = (
+				C77E0159DE0F428ABE5D24B9 /* UnixSharedFolderManager.swift */,
+			);
+			path = "Unix Shared Folder";
 			sourceTree = "<group>";
 		};
 		C7DCEF452E8704A100EAED05 /* Miscellaneous */ = {
@@ -2846,6 +2857,7 @@
 				C73660E82E34ED4F0055AA91 /* GestureInputView.swift in Sources */,
 				C74035B62EDC3B130045B9C6 /* PreferencesCells.swift in Sources */,
 				C70B65E52E7A7BEA0039680A /* MiscellaneousSettings.swift in Sources */,
+				C9ACF187028044D389C583F5 /* UnixSharedFolderManager.swift in Sources */,
 				E204B96928BC3EBE0081FDCA /* bincue.cpp in Sources */,
 				E204B9D628BC7BF10081FDCA /* main.mm in Sources */,
 				E204B96A28BC3EBE0081FDCA /* user_strings_unix.cpp in Sources */,

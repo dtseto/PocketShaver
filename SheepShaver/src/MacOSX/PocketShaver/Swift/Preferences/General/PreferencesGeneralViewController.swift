@@ -7,6 +7,7 @@
 
 import UIKit
 import Combine
+import UniformTypeIdentifiers
 
 class PreferencesGeneralViewController: PreferencesTableViewController {
 	enum Section {
@@ -14,6 +15,7 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		case bootstrap
 		case welcome
 		case disks
+		case unixSharedFolder
 		case gamepadOverlays
 		case iPadMouse
 		case twoFingerSteering
@@ -39,6 +41,10 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		case disksEmptyState
 		case disksDisk(PreferencesGeneralModel.DiskEntry)
 		case disksError
+
+		// unixSharedFolder
+		case unixSharedFolder(String)
+		case unixSharedFolderInfo
 
 		// gamepadOverlays
 		case gamepadOverlays
@@ -71,6 +77,7 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 	enum FilePickerSource: Int {
 		case romSelection
 		case fileImport
+		case unixSharedFolder
 	}
 
 	private let model: PreferencesGeneralModel
@@ -286,6 +293,24 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 				return PreferencesGeneralErrorCell(
 					title: "Must select to mount at least one disk file"
 				)
+			case .unixSharedFolder(let displayPath):
+				return PreferencesGeneralUnixSharedFolderCell(
+					currentPath: displayPath,
+					isDefault: !model.isUnixSharedFolderCustom,
+					didTapChange: { [weak self] in
+						self?.displayUnixSharedFolderPicker()
+					},
+					didTapReset: { [weak self] in
+						guard let self else { return }
+						model.resetUnixSharedFolder()
+						reloadData()
+						UINotificationFeedbackGenerator().notificationOccurred(.success)
+					}
+				)
+			case .unixSharedFolderInfo:
+				return PreferencesInformationCell(
+					text: "Exposed inside Mac OS as the UNIX drive. Changing it requires a restart."
+				)
 			case .gamepadOverlays:
 				return PreferencesGeneralGamepadOverlaysCell(
 					containerVC: self,
@@ -421,6 +446,8 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 			case .disks:
 				// iPhone stays unlabeled for space; iPad and Mac get the heading.
 				return UIDevice.deviceType == .iPhone ? nil : "Disks"
+			case .unixSharedFolder:
+				return "Shared UNIX folder"
 			case .gamepadOverlays:
 				return "Gamepad overlays"
 			case .iPadMouse:
@@ -510,6 +537,12 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		if model.isDisplayingNoDiskFilesError {
 			snapshot.appendItems([.disksError])
 		}
+
+		snapshot.appendSections([.unixSharedFolder])
+		snapshot.appendItems([
+			.unixSharedFolder(model.unixSharedFolderDisplayPath),
+			.unixSharedFolderInfo
+		])
 
 		if UIDevice.deviceType != .mac {
 			snapshot.appendSections([.gamepadOverlays])
@@ -755,6 +788,77 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		UIApplication.shared.open(FileManager.documentUrl)
 	}
 
+	// MARK: - Shared UNIX folder
+
+	private func displayUnixSharedFolderPicker() {
+		// Both platforms use UIDocumentPicker(.folder): NSOpenPanel / AppKit
+		// is unavailable in Mac Catalyst, and this app's "macOS" target IS
+		// Catalyst (plus Designed-for-iPad). The absolute POSIX path
+		// (`url.path`) is written to prefs on Mac; on iOS the URL is
+		// security-scoped and persisted as a bookmark (see delegate below).
+		presentIOSUnixSharedFolderPicker()
+	}
+
+	private func presentIOSUnixSharedFolderPicker() {
+		// No asCopy: folder picks return a security-scoped URL we persist
+		// as a bookmark (see UIDocumentPickerDelegate below).
+		let pickerVC = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+		pickerVC.delegate = self
+		pickerVC.view.tag = FilePickerSource.unixSharedFolder.rawValue
+		present(pickerVC, animated: true)
+	}
+
+	private func handleUnixSharedFolderPicked(url: URL) {
+		// Mac (Catalyst / Designed-for-iPad): unsandboxed, absolute POSIX
+		// path is all the core needs — equivalent to NSOpenPanel's url.path.
+		if UIDevice.deviceType == .mac {
+			do {
+				try model.setUnixSharedFolderMacPath(url.path)
+				reloadData()
+				UINotificationFeedbackGenerator().notificationOccurred(.success)
+			} catch {
+				let errorVC = UIAlertController.withMessage("Could not use that folder as the shared UNIX folder.")
+				present(errorVC, animated: true)
+			}
+			return
+		}
+		// iOS/iPadOS: security-scoped URL, persisted as bookmark.
+		let didStart = url.startAccessingSecurityScopedResource()
+		defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+		do {
+			let bookmark = try UnixSharedFolderManager.shared.makeBookmark(for: url)
+			try model.setUnixSharedFolderIOS(url: url, bookmark: bookmark)
+			reloadData()
+			UINotificationFeedbackGenerator().notificationOccurred(.success)
+		} catch {
+			displayUnixSharedFolderCopyFallback(url: url)
+		}
+	}
+
+	private func displayUnixSharedFolderCopyFallback(url: URL) {
+		let alertVC = UIAlertController(
+			title: "Could not keep access to that folder",
+			message: "PocketShaver could not persist access to the selected folder. Copy it into the app container instead?",
+			preferredStyle: .alert
+		)
+		alertVC.addAction(.init(title: "Copy folder", style: .default, handler: { [weak self] _ in
+				guard let self else { return }
+				do {
+					let destURL = try UnixSharedFolderManager.shared.copyFolderIntoContainer(sourceURL: url)
+					let bookmark = try UnixSharedFolderManager.shared.makeBookmark(for: destURL)
+					let didStart = destURL.startAccessingSecurityScopedResource()
+					defer { if didStart { destURL.stopAccessingSecurityScopedResource() } }
+					try self.model.setUnixSharedFolderIOS(url: destURL, bookmark: bookmark)
+					self.reloadData()
+				} catch {
+					let errorVC = UIAlertController.withError(error)
+					self.present(errorVC, animated: true)
+				}
+		}))
+		alertVC.addAction(.init(title: "Cancel", style: .cancel))
+		present(alertVC, animated: true)
+	}
+
 	// MARK: - Actions
 
 	@objc
@@ -823,6 +927,8 @@ extension PreferencesGeneralViewController: UIDocumentPickerDelegate {
 					present(errorVC, animated: true)
 				}
 			}
+		case .unixSharedFolder:
+			handleUnixSharedFolderPicked(url: url)
 		}
 	}
 }

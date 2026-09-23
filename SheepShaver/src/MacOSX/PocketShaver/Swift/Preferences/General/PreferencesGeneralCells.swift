@@ -1084,3 +1084,110 @@ private extension KeyboardAutoOffsetSetting {
 		}
 	}
 }
+
+class PreferencesGeneralUnixSharedFolderCell: UITableViewCell {
+	private lazy var titleLabel: UILabel = {
+		let label = UILabel.withoutConstraints()
+		label.font = .systemFont(ofSize: 17)
+		label.textColor = Colors.primaryText
+		label.text = "Shared UNIX folder"
+		label.setContentHuggingPriority(.required, for: .horizontal)
+		return label
+	}()
+
+	private lazy var pathLabel: UILabel = {
+		let label = UILabel.withoutConstraints()
+		label.font = .systemFont(ofSize: 13)
+		label.textColor = Colors.secondaryText
+		label.numberOfLines = 1
+		label.lineBreakMode = .byTruncatingMiddle
+		label.textAlignment = .right
+		label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+		return label
+	}()
+
+	private lazy var changeButton: UIButton = {
+		let button = UIButton.withoutConstraints()
+		button.configuration = .secondaryActionConfig
+		if UIDevice.deviceType == .mac {
+			button.preferredBehavioralStyle = .pad
+		}
+		button.setTitle("Change...", for: .normal)
+		button.addTarget(self, action: #selector(changeButtonPushed), for: .touchUpInside)
+		NSLayoutConstraint.activate([
+			button.heightAnchor.constraint(equalToConstant: 44)
+		])
+		return button
+	}()
+
+	private lazy var resetButton: UIButton = {
+		let button = UIButton.withoutConstraints()
+		button.setTitle("Reset", for: .normal)
+		button.setTitleColor(Colors.primaryText, for: .normal)
+		button.setTitleColor(Colors.highlightedText, for: .highlighted)
+		button.titleLabel?.font = .systemFont(ofSize: 15)
+		button.addTarget(self, action: #selector(resetButtonPushed), for: .touchUpInside)
+		return button
+	}()
+
+	private let didTapChange: (() -> Void)
+	private let didTapReset: (() -> Void)
+
+	init(
+		currentPath: String,
+		isDefault: Bool,
+		didTapChange: @escaping (() -> Void),
+		didTapReset: @escaping (() -> Void)
+	) {
+		self.didTapChange = didTapChange
+		self.didTapReset = didTapReset
+
+		super.init(style: .default, reuseIdentifier: nil)
+
+		backgroundColor = Colors.primaryBackground
+
+		hideSeparator()
+
+		contentView.addSubview(titleLabel)
+		contentView.addSubview(pathLabel)
+		contentView.addSubview(changeButton)
+		contentView.addSubview(resetButton)
+
+		NSLayoutConstraint.activate([
+			titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+			titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+			titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: resetButton.leadingAnchor, constant: -8),
+
+			resetButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+			resetButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+
+			pathLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+			pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
+			pathLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+
+			changeButton.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+			changeButton.topAnchor.constraint(equalTo: pathLabel.bottomAnchor, constant: 12),
+			changeButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+			changeButton.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+		])
+
+		configure(path: currentPath, isDefault: isDefault)
+	}
+
+	required init?(coder: NSCoder) { fatalError() }
+
+	func configure(path: String, isDefault: Bool) {
+		pathLabel.text = path
+		resetButton.isHidden = isDefault
+	}
+
+	@objc
+	private func changeButtonPushed() {
+		didTapChange()
+	}
+
+	@objc
+	private func resetButtonPushed() {
+		didTapReset()
+	}
+}

@@ -161,6 +161,36 @@ class PreferencesGeneralModel {
 		}
 	}
 
+	// MARK: - Shared UNIX folder (extfs)
+
+	@MainActor
+	var unixSharedFolderDisplayPath: String {
+		UnixSharedFolderManager.shared.displayPath
+	}
+
+	@MainActor
+	var isUnixSharedFolderCustom: Bool {
+		!UnixSharedFolderManager.shared.isUsingDefault
+	}
+
+	@MainActor
+	func setUnixSharedFolderMacPath(_ path: String) throws {
+		try UnixSharedFolderManager.shared.setMacPath(path)
+		changeSubject.send(.changeRequiringRestartAfterBootMade)
+	}
+
+	@MainActor
+	func setUnixSharedFolderIOS(url: URL, bookmark: Data) throws {
+		try UnixSharedFolderManager.shared.setIOSFolder(url: url, bookmark: bookmark)
+		changeSubject.send(.changeRequiringRestartAfterBootMade)
+	}
+
+	@MainActor
+	func resetUnixSharedFolder() {
+		UnixSharedFolderManager.shared.resetToDefault()
+		changeSubject.send(.changeRequiringRestartAfterBootMade)
+	}
+
 
 	// MARK: - Initializer
 
