@@ -73,7 +73,9 @@ class PreferencesGraphicsViewController: PreferencesTableViewController {
 	override func viewDidLoad() {
 		super.viewDidLoad()
 
-		tableView.showsVerticalScrollIndicator = false
+		tableView.showsVerticalScrollIndicator = true
+		tableView.showsHorizontalScrollIndicator = false
+		tableView.alwaysBounceVertical = true
 		view.translatesAutoresizingMaskIntoConstraints = false
 
 		setupDataSource()

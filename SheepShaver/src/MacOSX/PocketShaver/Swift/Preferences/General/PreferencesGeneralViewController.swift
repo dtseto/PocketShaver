@@ -102,7 +102,9 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 
 		view.translatesAutoresizingMaskIntoConstraints = false
 
-		tableView.showsVerticalScrollIndicator = false
+		tableView.showsVerticalScrollIndicator = true
+		tableView.showsHorizontalScrollIndicator = false
+		tableView.alwaysBounceVertical = true
 		tableView.delaysContentTouches = false
 		PreferencesGeneralDiskCell.register(in: tableView)
 

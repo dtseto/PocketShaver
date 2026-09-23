@@ -215,6 +215,13 @@ public class PreferencesViewController: UIViewController {
 	}
 
 	private func display(tab: Tab) {
+		// Hidden sibling table views stay full-frame in the hierarchy; unless
+		// hidden they can sit above the visible tab after re-layout and
+		// swallow its pan gestures, making the visible list unscrollable.
+		generalVC.view.isHidden = tab != .general
+		graphicsVC.view.isHidden = tab != .graphics
+		networkVC.view.isHidden = tab != .network
+		advancedVC.view.isHidden = tab != .advanced
 		switch tab {
 		case .general:
 			contentView.bringSubviewToFront(generalVC.view)
