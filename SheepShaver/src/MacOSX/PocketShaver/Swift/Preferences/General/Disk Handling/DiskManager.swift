@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import UIKit
 
 enum DiskType: String, Codable {
 	case disk
@@ -36,6 +37,7 @@ struct Disk: Codable, Equatable, Hashable {
 		return romVersion?.osString
 	}
 
+	@MainActor
 	init(
 		_ pathOrFilename: String,
 		isEnabled: Bool
@@ -56,6 +58,7 @@ struct Disk: Codable, Equatable, Hashable {
 		self.isEnabled = isEnabled
 	}
 
+	@MainActor
 	fileprivate mutating func reevaluateBootability() {
 		guard shouldReevaluateBootability else {
 			return
@@ -320,6 +323,7 @@ extension DiskDataChange {
 	}
 }
 
+@MainActor
 fileprivate func fileIsBootable(filename: String) -> Bool {
 	let path = DiskManager.urlForDiskFile(filename: filename)
 
@@ -337,6 +341,7 @@ fileprivate func fileIsBootable(filename: String) -> Bool {
 	return success
 }
 
+@MainActor
 fileprivate func fileRomVersion(filename: String) -> NewWorldRomVersion? {
 	let path = DiskManager.urlForDiskFile(filename: filename)
 	let destFileUrl = Storage.urlForDocumentFile(filename: ".extractedRom")
