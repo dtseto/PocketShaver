@@ -14,7 +14,12 @@ BOOL objc_createDiskWithName(NSString *inName, NSInteger sizeInMb)
 	// (the OS container's Documents on iOS and, on Mac Catalyst, the app
 	// container's Data/Documents) rather than the user's real ~/Documents.
 	NSString* aDocsDirectory = [NSString stringWithUTF8String:document_directory()];
-	NSString* aFilePath = [aDocsDirectory stringByAppendingPathComponent:inName];
+	return objc_createDiskWithNameInDirectory(inName, sizeInMb, aDocsDirectory);
+}
+
+BOOL objc_createDiskWithNameInDirectory(NSString *inName, NSInteger sizeInMb, NSString *inDirectory)
+{
+	NSString* aFilePath = [inDirectory stringByAppendingPathComponent:inName];
 
 	// Use the file manager to create the file, then use truncate to set the length.
 	char aBytes[1024];

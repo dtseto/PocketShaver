@@ -59,7 +59,7 @@ class PreferencesManager {
 				continue
 			}
 
-			let filePath = (FileManager.documentUrl.path as NSString).appendingPathComponent(disk.filename)
+			let filePath = (DiskManager.diskStoreURL.path as NSString).appendingPathComponent(disk.filename)
 			let name = disk.type == .cd ? "cdrom" : "disk"
 			objc_addString(name, filePath)
 		}

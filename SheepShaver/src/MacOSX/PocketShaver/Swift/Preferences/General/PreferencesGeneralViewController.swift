@@ -308,8 +308,14 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 					}
 				)
 			case .unixSharedFolderInfo:
+				let text: String
+				if model.isUnixSharedFolderCustom, UIDevice.deviceType == .mac {
+					text = "Exposed inside Mac OS as the UNIX drive. New and imported disk files are stored here while custom. Changing it requires a restart, and disks from the previous folder will no longer be listed."
+				} else {
+					text = "Exposed inside Mac OS as the UNIX drive. Changing it requires a restart."
+				}
 				return PreferencesInformationCell(
-					text: "Exposed inside Mac OS as the UNIX drive. Changing it requires a restart."
+					text: text
 				)
 			case .gamepadOverlays:
 				return PreferencesGeneralGamepadOverlaysCell(
@@ -784,8 +790,9 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 	// MARK: - Open documents folder
 
 	private func openDocumentsFolder() {
-		// Only works on mac. And is only needed there, too.
-		UIApplication.shared.open(FileManager.documentUrl)
+		// Opens wherever disks actually live: the manual UNIX folder when set
+		// on Mac, else Documents. Only works on mac. And is only needed there, too.
+		UIApplication.shared.open(DiskManager.diskStoreURL)
 	}
 
 	// MARK: - Shared UNIX folder

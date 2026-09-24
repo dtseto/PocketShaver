@@ -11,3 +11,8 @@
 extern "C"
 #endif
 BOOL objc_createDiskWithName(NSString *inName, NSInteger sizeInMb);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+BOOL objc_createDiskWithNameInDirectory(NSString *inName, NSInteger sizeInMb, NSString *inDirectory);

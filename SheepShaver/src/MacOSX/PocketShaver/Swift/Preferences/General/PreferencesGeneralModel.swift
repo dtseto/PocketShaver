@@ -238,12 +238,18 @@ class PreferencesGeneralModel {
 
 		let fixedName = name.hasSuffix(".dsk") ? name : "\(name).dsk"
 
-		let path = Storage.urlForDocumentFile(filename: fixedName).path
+		// Disks live in the manual UNIX folder when set on Mac, else Documents.
+		let storeURL = DiskManager.diskStoreURL
+		guard FileManager.default.isWritableFile(atPath: storeURL.path) else {
+			throw PreferencesGeneralError.fileCreationFailedOtherError
+		}
+
+		let path = storeURL.appendingPathComponent(fixedName).path
 		guard !FileManager.default.fileExists(atPath: path) else {
 			throw PreferencesGeneralError.fileWithFilenameAleadyExists
 		}
 
-		let success = objc_createDiskWithName(fixedName, sizeInMb)
+		let success = objc_createDiskWithNameInDirectory(fixedName, sizeInMb, storeURL.path)
 		if !success {
 			throw PreferencesGeneralError.fileCreationFailedOtherError
 		}
@@ -261,22 +267,32 @@ class PreferencesGeneralModel {
 			throw PreferencesGeneralError.fileImportWrongSuffix
 		}
 
-		let docsUrl = FileManager.documentUrl
-		let destUrl = docsUrl.appendingPathComponent(url.lastPathComponent)
+		let storeURL = DiskManager.diskStoreURL
+		let destUrl = storeURL.appendingPathComponent(url.lastPathComponent)
+
+		// Adopt in place: the picked file already lives in the disk store, so
+		// there is nothing to move (avoids duplicating ISOs/HDs that already
+		// sit in the manual UNIX folder).
+		let alreadyInStore = url.standardizedFileURL.path == destUrl.standardizedFileURL.path
+			|| url.deletingLastPathComponent().standardizedFileURL.path == storeURL.standardizedFileURL.path
 
 		if FileManager.default.fileExists(atPath: destUrl.path) {
-			throw PreferencesGeneralError.fileWithFilenameAleadyExists
-		}
-
-		var error: NSError?
-		try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-			NSFileCoordinator().coordinate(readingItemAt: url, error: &error) { srcURL in
-				do {
-					try FileManager.default.moveItem(at: srcURL, to: destUrl)
-					continuation.resume(returning: ())
-				} catch {
-					print("-- write fail \(error)")
-					continuation.resume(throwing: error)
+			// Same file adopted in place is fine; a different file with the
+			// same name is still a collision.
+			if !alreadyInStore {
+				throw PreferencesGeneralError.fileWithFilenameAleadyExists
+			}
+		} else if !alreadyInStore {
+			var error: NSError?
+			try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+				NSFileCoordinator().coordinate(readingItemAt: url, error: &error) { srcURL in
+					do {
+						try FileManager.default.moveItem(at: srcURL, to: destUrl)
+						continuation.resume(returning: ())
+					} catch {
+						print("-- write fail \(error)")
+						continuation.resume(throwing: error)
+					}
 				}
 			}
 		}

@@ -145,6 +145,24 @@ class DiskManager {
 	static let supportedFileExtensions = ["dsk", "dmg", "cdr", "iso", "cue", "toast", "img"]
 	static let assumedCdRomFileExtensions = ["iso", "cdr", "toast", "cue"]
 
+	/// Folder disk images live in. On Mac with a manual shared UNIX folder
+	/// set, imports/creations land there so files are not duplicated between
+	/// Documents and the UNIX folder. Otherwise (and always on iOS, where the
+	/// bookmarked folder is only accessible during emulation) it is Documents.
+	@MainActor
+	static var diskStoreURL: URL {
+		if UIDevice.deviceType == .mac,
+		   !UnixSharedFolderManager.shared.isUsingDefault {
+			return UnixSharedFolderManager.shared.effectiveURL
+		}
+		return FileManager.documentUrl
+	}
+
+	@MainActor
+	static func urlForDiskFile(filename: String) -> URL {
+		diskStoreURL.appendingPathComponent(filename)
+	}
+
 	@MainActor
 	private var diskConfig = DiskConfig.current
 
@@ -177,7 +195,7 @@ class DiskManager {
 		let oldDiskArray = diskArray
 		var diskArray = diskArray
 
-		let allElements = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.documentUrl.path)) ?? []
+		let allElements = (try? FileManager.default.contentsOfDirectory(atPath: Self.diskStoreURL.path)) ?? []
 
 		let candidateFilePaths = allElements.filter({
 			$0.lowercased().hasSuffixMatchingSuffixes(in: Self.supportedFileExtensions)
@@ -239,7 +257,7 @@ class DiskManager {
 			return
 		}
 
-		let url = Storage.urlForDocumentFile(filename: filename)
+		let url = Self.urlForDiskFile(filename: filename)
 		Storage.deleteIfExists(url)
 
 		diskConfig.disks.remove(at: index)
@@ -303,7 +321,7 @@ extension DiskDataChange {
 }
 
 fileprivate func fileIsBootable(filename: String) -> Bool {
-	let path = Storage.urlForDocumentFile(filename: filename)
+	let path = DiskManager.urlForDiskFile(filename: filename)
 
 	let destFileUrl = Storage.urlForDocumentFile(filename: ".extractedFinder")
 	Storage.deleteIfExists(destFileUrl)
@@ -320,7 +338,7 @@ fileprivate func fileIsBootable(filename: String) -> Bool {
 }
 
 fileprivate func fileRomVersion(filename: String) -> NewWorldRomVersion? {
-	let path = Storage.urlForDocumentFile(filename: filename)
+	let path = DiskManager.urlForDiskFile(filename: filename)
 	let destFileUrl = Storage.urlForDocumentFile(filename: ".extractedRom")
 	defer {
 		Storage.deleteIfExists(destFileUrl)
