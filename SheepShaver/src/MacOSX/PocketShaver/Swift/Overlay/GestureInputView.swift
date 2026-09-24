@@ -51,10 +51,14 @@ class GestureInputView: UIView {
 #if targetEnvironment(macCatalyst)
 	// Mac Catalyst mouse-position bypass. SDL's Catalyst window transposes to
 	// portrait on unfocus/refocus and clamps mouse-x, so the guest cursor is
-	// driven from the real UIKit pointer location instead. Buttons continue to
-	// flow through SDL. Hover covers button-up moves; touchesMoved (below) covers
+	// driven from the real UIKit pointer location instead. Buttons are injected
+	// explicitly below (this view covers the SDL view, so SDL never sees the
+	// click). Hover covers button-up moves; touchesMoved (below) covers
 	// button-down drags.
 	private weak var catalystHover: UIHoverGestureRecognizer?
+	// Tracks the single-touch Catalyst mouse click we inject ADB down/up for.
+	// (The full-screen overlay eats the click, so SDL never sees it.)
+	private var catalystClickTouch: UITouch?
 
 	override func didMoveToWindow() {
 		super.didMoveToWindow()
@@ -99,6 +103,29 @@ class GestureInputView: UIView {
 			draggingMode = .twoFingers
 			didBeginTwoFingerGesture?()
 		 }
+
+#if targetEnvironment(macCatalyst)
+		// Catalyst mouse click bypass. This view covers the SDL view, so a
+		// single-touch (mouse) click never reaches SDL's button path, while
+		// hover/drag position still flows via the bypass above. Inject the
+		// button press explicitly with the same ADB API the on-screen
+		// .mouseClick button uses. Multi-touch transitions into a gesture —
+		// cancel the injected click so gestures never emit stray downs.
+		if state != .editingGamepad {
+			if draggingMode != .none {
+				if catalystClickTouch != nil {
+					objc_ADBWriteMouseUp(0)
+					catalystClickTouch = nil
+				}
+			} else if touchDictionary.count == 1, touches.count == 1,
+				let touch = touches.first, let window {
+				let p = touch.location(in: window)
+				objc_ADBMouseMovedFromWindowPoint(p.x, p.y)
+				objc_ADBWriteMouseDown(0)
+				catalystClickTouch = touch
+			}
+		}
+#endif
 
 #if !targetEnvironment(macCatalyst)
 		// iOS: snap the guest cursor to the steering finger the instant it lands
@@ -212,6 +239,13 @@ class GestureInputView: UIView {
 	override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
 		super.touchesEnded(touches, with: event)
 
+#if targetEnvironment(macCatalyst)
+		if let t = catalystClickTouch, touches.contains(t) {
+			objc_ADBWriteMouseUp(0)
+			catalystClickTouch = nil
+		}
+#endif
+
 		for touch in touches {
 			touchDictionary[touch] = nil
 		}
@@ -247,6 +281,13 @@ class GestureInputView: UIView {
 
 	override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
 		super.touchesCancelled(touches, with: event)
+
+#if targetEnvironment(macCatalyst)
+		if let t = catalystClickTouch, touches.contains(t) {
+			objc_ADBWriteMouseUp(0)
+			catalystClickTouch = nil
+		}
+#endif
 		
 		for touch in touches {
 			touchDictionary[touch] = nil
