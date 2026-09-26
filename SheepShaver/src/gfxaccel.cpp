@@ -523,6 +523,18 @@ bool NQD_bitblt_hook(uint32 p)
 		const bool colorizing_bool = (mode == 1 || (mode >= 3 && mode <= 7));
 		if (colorizing_bool && src_px >= 8) {
 			// Fall through to the CPU fallback / software QuickDraw (DELIBERATE).
+		} else if (mode == 36) {
+			// Transparent mode compares each source pixel against the
+			// port's background pen and skips matches. The Metal kernel
+				// compares against the accl_params back_pen field, but
+				// games that paint sprites via CopyMask-style transparent
+				// blits can leave a stale back_pen in the params while the
+				// real transparent colour travels in the mask or the
+				// source pixels themselves — the mismatch draws the
+				// transparent colour as a magenta/purple fringe around
+				// sprites. Decline to software QuickDraw, which resolves
+				// the background colour the same way the game expects.
+			// Fall through to the CPU fallback / software QuickDraw (DELIBERATE).
 		} else if (mode <= 7 || (mode >= 32 && mode <= 39) || mode == 50) {
 			// Same-surface overlapping blits: the nqd_bitblt kernel is one
 			// flat unordered dispatch, and only the standard-depth Boolean
@@ -615,6 +627,13 @@ bool NQD_bltmask_hook(uint32 arg)
 	}
 
 	const uint32 mode = ReadMacInt32(arg + acclTransferMode);
+	if (mode == 36) {
+		// Same transparent-mode back_pen hazard as NQD_bitblt_hook: the
+		// masked kernel still runs the mode-36 "skip if src matches
+			// background" compare, so a stale back_pen fringes sprites
+			// with the transparent colour. Decline to software QuickDraw.
+		return NQD_decline_with_flush(arg);
+	}
 	if (!(mode <= 7 || (mode >= 32 && mode <= 39) || mode == 50)) {
 		return NQD_decline_with_flush(arg);
 	}
