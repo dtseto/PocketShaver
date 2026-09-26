@@ -10,6 +10,7 @@
 #include "my_sdl.h"
 #import "PrefsObjC.h"
 #import "audio_sdl.h"
+#import "utils_ios.h"
 #import <TargetConditionals.h>
 #if TARGET_OS_MACCATALYST
 #import <objc/message.h>
@@ -94,6 +95,14 @@ void objc_update_audio_enabled_setting(BOOL isEnabled) {
 
 void objc_savePrefs(void) {
 	SavePrefs();
+}
+
+NSString* _Nonnull objc_pocketshaver_home_directory(void) {
+#if TARGET_OS_MACCATALYST
+	return [NSString stringWithUTF8String:pocketshaver_home_directory()];
+#else
+	return NSHomeDirectory();
+#endif
 }
 
 double catalyst_screen_top_inset(void) {

@@ -200,6 +200,7 @@
 		C7C3D2752E781ACF0018DB8B /* PreferencesAdvancedCells.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C3D2742E781ACD0018DB8B /* PreferencesAdvancedCells.swift */; };
 		C7C3D2772E781C270018DB8B /* PreferencesAdvancedModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C3D2762E781C250018DB8B /* PreferencesAdvancedModel.swift */; };
 		C7C64B2B2E617DF200163200 /* DiskManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C64B2A2E617DF000163200 /* DiskManager.swift */; };
+		C7C64B2B2E617DF300163200 /* DiskDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7C64B2A2E617DF100163200 /* DiskDiagnostics.swift */; };
 		C7C64B2D2E617FB100163200 /* PrefsObjC.mm in Sources */ = {isa = PBXBuildFile; fileRef = C7C64B2C2E617FAC00163200 /* PrefsObjC.mm */; };
 		C7CB34C42F6FC17F003E02E1 /* PreferencesGeneralCreateDiskDialogueFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CB34C32F6FC16D003E02E1 /* PreferencesGeneralCreateDiskDialogueFactory.swift */; };
 		C7CF605E2F8AA54400D39886 /* PreferencesGraphicsCells.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CF605A2F8AA54400D39886 /* PreferencesGraphicsCells.swift */; };
@@ -846,6 +847,7 @@
 		C7C3D2762E781C250018DB8B /* PreferencesAdvancedModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesAdvancedModel.swift; sourceTree = "<group>"; };
 		C7C3D2782E78232B0018DB8B /* RomManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RomManager.swift; sourceTree = "<group>"; };
 		C7C64B2A2E617DF000163200 /* DiskManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskManager.swift; sourceTree = "<group>"; };
+		C7C64B2A2E617DF100163200 /* DiskDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskDiagnostics.swift; sourceTree = "<group>"; };
 		C7C64B2C2E617FAC00163200 /* PrefsObjC.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = PrefsObjC.mm; sourceTree = "<group>"; };
 		C7C64B2E2E617FC200163200 /* PrefsObjC.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PrefsObjC.h; sourceTree = "<group>"; };
 		C7CB34C32F6FC16D003E02E1 /* PreferencesGeneralCreateDiskDialogueFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesGeneralCreateDiskDialogueFactory.swift; sourceTree = "<group>"; };
@@ -1785,6 +1787,7 @@
 			isa = PBXGroup;
 			children = (
 				C7C64B2A2E617DF000163200 /* DiskManager.swift */,
+				C7C64B2A2E617DF100163200 /* DiskDiagnostics.swift */,
 				C75073792E65E14700D1E374 /* DiskCreation.mm */,
 				C750737B2E65E15200D1E374 /* DiskCreation.h */,
 			);
@@ -2740,6 +2743,7 @@
 				C752E17B30206DFA00CE3EC1 /* GamepadButtonBrowserViewController.swift in Sources */,
 				C750737A2E65E14F00D1E374 /* DiskCreation.mm in Sources */,
 				C7C64B2B2E617DF200163200 /* DiskManager.swift in Sources */,
+				C7C64B2B2E617DF300163200 /* DiskDiagnostics.swift in Sources */,
 				C7393CCD2E6DC6A200D06705 /* PreferencesResolutionsCells.swift in Sources */,
 				E204B95128BC3EBE0081FDCA /* rom_patches.cpp in Sources */,
 				C77F12232F39D5130033BE25 /* GamepadManager.swift in Sources */,

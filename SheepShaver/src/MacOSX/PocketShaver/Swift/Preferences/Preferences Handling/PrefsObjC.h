@@ -67,6 +67,14 @@ extern "C"
 #endif
 void objc_savePrefs(void);
 
+// Mac Catalyst only: the container Data home path the emulator core resolves
+// (pocketshaver_home_directory()). Lets Swift diagnostics verify byte-identity
+// with FileManager.pocketShaverHome. Returns NSHomeDirectory() off Catalyst.
+#ifdef __cplusplus
+extern "C"
+#endif
+NSString* _Nonnull objc_pocketshaver_home_directory(void);
+
 // Mac Catalyst only: apply the Windowed(NO)/Full Screen(YES) choice to the live emulation
 // window. No-op off Catalyst.
 #ifdef __cplusplus

@@ -232,6 +232,8 @@ class DiskManager {
 		diskConfig.disks = diskArray
 		diskConfig.processAndSaveAsCurrent()
 
+		DiskDiagnostics.logRescan(storeURL: Self.diskStoreURL, candidateFilenames: candidateFilenames, diskArray: diskConfig.disks)
+
 		let newDiskArray = diskConfig.disks
 
 		return .init(oldArray: oldDiskArray, newArray: newDiskArray)
