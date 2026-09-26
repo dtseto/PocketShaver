@@ -60,6 +60,15 @@ class PreferencesManager {
 			}
 
 			let filePath = (DiskManager.diskStoreURL.path as NSString).appendingPathComponent(disk.filename)
+			guard FileManager.default.fileExists(atPath: filePath) else {
+				// The file vanished after being enabled (deleted in Finder,
+				// volume unmounted, disk store switched). Writing a dead path
+				// makes the guest sit in SCSI/CD probe timeouts, so skip it.
+				// loadDiskData prunes the entry from the saved config on the
+				// next rescan; this guard covers the window in between.
+				print("- Skipped missing \(disk.type == .cd ? "cdrom" : "disk") '\(filePath)' (file not on disk)")
+				continue
+			}
 			let name = disk.type == .cd ? "cdrom" : "disk"
 			objc_addString(name, filePath)
 		}
