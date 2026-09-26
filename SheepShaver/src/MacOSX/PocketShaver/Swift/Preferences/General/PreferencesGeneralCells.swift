@@ -277,7 +277,7 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 		label.numberOfLines = 0
 		label.font = .systemFont(ofSize: 14)
 		label.textColor = Colors.secondaryText
-		label.text = "Tap button below to select a Mac OS install disc file and bootstrap PocketShaver.\n\nBootstrapping is not the same as installing Mac OS onto a disk file."
+		label.text = "Tap a button below to bootstrap PocketShaver: select a Mac OS install disc file for automatic ROM extraction, or select a ROM file manually.\n\nBootstrapping is not the same as installing Mac OS onto a disk file."
 		return label
 	}()
 
@@ -298,6 +298,17 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 		}
 		button.setTitle("Select Mac OS install disc file", for: .normal)
 		button.addTarget(self, action: #selector(selectInstallDiskFileButtonPushed), for: .touchUpInside)
+		return button
+	}()
+
+	private lazy var selectRomFileButton: UIButton = {
+		let button = UIButton.withoutConstraints()
+		button.configuration = .secondaryActionConfig
+		if UIDevice.deviceType == .mac {
+			button.preferredBehavioralStyle = .pad
+		}
+		button.setTitle("Select ROM file manually", for: .normal)
+		button.addTarget(self, action: #selector(selectRomFileButtonPushed), for: .touchUpInside)
 		return button
 	}()
 
@@ -331,16 +342,19 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 	}()
 
 	private let didTapSelectInstallDiskButton: (() -> Void)
+	private let didTapSelectRomFileButton: (() -> Void)
 	private let didTapCompatibilityListButton: (() -> Void)
 	private let didTapDoneButton: (() -> Void)
 
 	init(
 		didTapSelectInstallDiskButton: @escaping (() -> Void),
+		didTapSelectRomFileButton: @escaping (() -> Void),
 		didTapCompatibilityListButton: @escaping (() -> Void),
 		didTapDoneButton: @escaping (() -> Void)
 
 	) {
 		self.didTapSelectInstallDiskButton = didTapSelectInstallDiskButton
+		self.didTapSelectRomFileButton = didTapSelectRomFileButton
 		self.didTapCompatibilityListButton = didTapCompatibilityListButton
 		self.didTapDoneButton = didTapDoneButton
 
@@ -354,6 +368,7 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 		stackView.addArrangedSubview(titleLabel)
 		stackView.addArrangedSubview(bootstrapCompletedView)
 		stackView.addArrangedSubview(selectInstallDiskFileButton)
+		stackView.addArrangedSubview(selectRomFileButton)
 		stackView.addArrangedSubview(displayCompatibilityListButton)
 		stackView.addArrangedSubview(doneButton)
 
@@ -365,6 +380,7 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 			stackView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -16),
 
 			selectInstallDiskFileButton.heightAnchor.constraint(equalToConstant: 44),
+			selectRomFileButton.heightAnchor.constraint(equalToConstant: 44),
 			displayCompatibilityListButton.heightAnchor.constraint(equalToConstant: 44),
 			doneButton.heightAnchor.constraint(equalToConstant: 44),
 
@@ -382,6 +398,7 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 	func displayBootstrapCompleted() {
 		titleLabel.isHidden = true
 		selectInstallDiskFileButton.isHidden = true
+		selectRomFileButton.isHidden = true
 		displayCompatibilityListButton.isHidden = true
 
 		bootstrapCompletedView.isHidden = false
@@ -391,6 +408,11 @@ class PreferencesGeneralBootstrapCell: UITableViewCell {
 	@objc
 	private func selectInstallDiskFileButtonPushed() {
 		didTapSelectInstallDiskButton()
+	}
+
+	@objc
+	private func selectRomFileButtonPushed() {
+		didTapSelectRomFileButton()
 	}
 
 	@objc

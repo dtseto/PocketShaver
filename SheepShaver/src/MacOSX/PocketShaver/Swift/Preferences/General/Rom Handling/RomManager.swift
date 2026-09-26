@@ -52,6 +52,10 @@ class RomManager {
 		return await didSelectRomCandidate(url: extractedRomUrl)
 	}
 
+	func didSelectRomFileCandidate(url: URL) async -> RomValidationResult {
+		return await didSelectRomCandidate(url: url)
+	}
+
 	private func didSelectRomCandidate(url: URL) async -> RomValidationResult {
 		var error: NSError?
 		return await withCheckedContinuation { continuation in
@@ -60,9 +64,12 @@ class RomManager {
 					if FileManager.default.fileExists(atPath: tmpRomUrl.path) {
 						try FileManager.default.removeItem(at: tmpRomUrl)
 					}
-					try FileManager.default.moveItem(at: srcURL, to: tmpRomUrl)
+					// Copy rather than move: srcURL may be the document picker's
+					// temporary copy (manual ROM file) or our own extracted file.
+					try FileManager.default.copyItem(at: srcURL, to: tmpRomUrl)
 				} catch {
 					continuation.resume(returning: RomValidationResult.error(error))
+					return
 				}
 
 				guard let md5Hash = try? Storage.getFileMd5Hash(tmpRomUrl),

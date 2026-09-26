@@ -231,6 +231,11 @@ class PreferencesGeneralModel {
 	}
 
 	@MainActor
+	func didSelectRomFileCandidate(url: URL) async -> RomValidationResult {
+		await RomManager.shared.didSelectRomFileCandidate(url: url)
+	}
+
+	@MainActor
 	func createNewDisk(name: String, sizeInMb: Int) throws -> Disk? {
 		guard sizeInMb > 0 else {
 			throw PreferencesGeneralError.fileCreationInvalidSize

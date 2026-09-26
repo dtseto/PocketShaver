@@ -271,6 +271,13 @@ class PreferencesAdvancedModel {
 		changeSubject.send(.changeRequiringRestartAfterBootMade)
 		return result
 	}
+
+	@MainActor
+	func didSelectRomFileCandidate(url: URL) async -> RomValidationResult {
+		let result = await RomManager.shared.didSelectRomFileCandidate(url: url)
+		changeSubject.send(.changeRequiringRestartAfterBootMade)
+		return result
+	}
 }
 
 extension PreferencesGeneralRamSetting {

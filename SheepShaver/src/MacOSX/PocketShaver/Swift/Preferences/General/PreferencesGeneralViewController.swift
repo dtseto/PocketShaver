@@ -76,6 +76,7 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 
 	enum FilePickerSource: Int {
 		case romSelection
+		case romFileSelection
 		case fileImport
 		case unixSharedFolder
 	}
@@ -150,6 +151,9 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 				return PreferencesGeneralBootstrapCell(
 					didTapSelectInstallDiskButton: { [weak self] in
 						self?.displayMacOsInstallDiskPicker()
+					},
+					didTapSelectRomFileButton: { [weak self] in
+						self?.displayRomFilePicker()
 					},
 					didTapCompatibilityListButton: { [weak self] in
 						guard let self else { return }
@@ -648,6 +652,14 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		present(pickerVC, animated: true)
 	}
 
+	private func displayRomFilePicker() {
+		let pickerVC = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
+		pickerVC.delegate = self
+		pickerVC.view.tag = FilePickerSource.romFileSelection.rawValue
+
+		present(pickerVC, animated: true)
+	}
+
 	private func animateBootstrapCompleted() {
 		guard let cell = tableView.visibleCells.first(where: { $0 is PreferencesGeneralBootstrapCell }) as? PreferencesGeneralBootstrapCell else {
 			return
@@ -662,6 +674,18 @@ class PreferencesGeneralViewController: PreferencesTableViewController {
 		let alertVC = UIAlertController(
 			title: "Mac OS install disc image not compatible",
 			message: "The provided file is not a compatible Mac OS install disc image for bootstrapping PocketShaver. Check 'Compatibility list' for guidence.",
+			preferredStyle: .alert
+		)
+
+		alertVC.addAction(.init(title: "Ok", style: .default))
+
+		present(alertVC, animated: true)
+	}
+
+	private func displayInvalidRomFileDialogue() {
+		let alertVC = UIAlertController(
+			title: "ROM file not compatible",
+			message: "The provided file is not a compatible ROM file for bootstrapping PocketShaver. Check 'Bootstrap compatibility list' for guidence.",
 			preferredStyle: .alert
 		)
 
@@ -904,6 +928,22 @@ extension PreferencesGeneralViewController: UIDocumentPickerDelegate {
 					displayIncompatibleRomFoundDialogue(newWorldRomVersion)
 				case .invalidFile:
 					displayNoRomFoundDialogue()
+				case .error(let error):
+					let errorVC = UIAlertController.withError(error)
+					present(errorVC, animated: true)
+				}
+			}
+		case .romFileSelection:
+			Task { [weak self, model] in
+				guard let self else { return }
+				let validationResult = await model.didSelectRomFileCandidate(url: url)
+				switch validationResult {
+				case .success:
+					animateBootstrapCompleted()
+				case .incompatibleRom(let newWorldRomVersion):
+					displayIncompatibleRomFoundDialogue(newWorldRomVersion)
+				case .invalidFile:
+					displayInvalidRomFileDialogue()
 				case .error(let error):
 					let errorVC = UIAlertController.withError(error)
 					present(errorVC, animated: true)

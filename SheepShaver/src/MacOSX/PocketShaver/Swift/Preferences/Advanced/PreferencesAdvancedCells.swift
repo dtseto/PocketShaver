@@ -244,13 +244,27 @@ class PreferencesAdvancedBootstrapCell: UITableViewCell {
 		return button
 	}()
 
+	private lazy var selectRomFileButton: UIButton = {
+		let button = UIButton.withoutConstraints()
+		button.configuration = .secondaryActionConfig
+		if UIDevice.deviceType == .mac {
+			button.preferredBehavioralStyle = .pad
+		}
+		button.setTitle("Select ROM file manually", for: .normal)
+		button.addTarget(self, action: #selector(selectRomFileButtonPushed), for: .touchUpInside)
+		return button
+	}()
+
 	private let didTapSelectInstallDiskButton: (() -> Void)
+	private let didTapSelectRomFileButton: (() -> Void)
 
 	init(
 		romDescription: String,
-		didTapSelectInstallDiskButton: @escaping (() -> Void)
+		didTapSelectInstallDiskButton: @escaping (() -> Void),
+		didTapSelectRomFileButton: @escaping (() -> Void)
 	) {
 		self.didTapSelectInstallDiskButton = didTapSelectInstallDiskButton
+		self.didTapSelectRomFileButton = didTapSelectRomFileButton
 
 		super.init(style: .default, reuseIdentifier: nil)
 
@@ -261,6 +275,7 @@ class PreferencesAdvancedBootstrapCell: UITableViewCell {
 		contentView.addSubview(containerView)
 		containerView.addSubview(titleLabel)
 		containerView.addSubview(selectInstallDiskFileButton)
+		containerView.addSubview(selectRomFileButton)
 
 		NSLayoutConstraint.activate([
 			titleLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
@@ -272,7 +287,12 @@ class PreferencesAdvancedBootstrapCell: UITableViewCell {
 			selectInstallDiskFileButton.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 16),
 			selectInstallDiskFileButton.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
 			selectInstallDiskFileButton.heightAnchor.constraint(equalToConstant: 44),
-			selectInstallDiskFileButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -16),
+
+			selectRomFileButton.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 16),
+			selectRomFileButton.topAnchor.constraint(equalTo: selectInstallDiskFileButton.bottomAnchor, constant: 12),
+			selectRomFileButton.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -16),
+			selectRomFileButton.heightAnchor.constraint(equalToConstant: 44),
+			selectRomFileButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -16),
 
 			containerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
 			containerView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
@@ -287,13 +307,18 @@ class PreferencesAdvancedBootstrapCell: UITableViewCell {
 	required init?(coder: NSCoder) { fatalError() }
 
 	func configure(with romDescription: String) {
-		titleLabel.attributedText = "PocketShaver is bootstrapped by an install disc identified as belonging to category <b>\(romDescription)</b>. Tap 'Select Mac OS install disc' if you want to redo bootstrapping with another install disc."
+		titleLabel.attributedText = "PocketShaver is bootstrapped by an install disc identified as belonging to category <b>\(romDescription)</b>. Tap 'Select Mac OS install disc' if you want to redo bootstrapping with another install disc, or 'Select ROM file manually' to pick a ROM file directly."
 			.withTagsReplaced(by: .init(boldAppearance: .init(font: .boldSystemFont(ofSize: 14), color: Colors.primaryText)))
 	}
 
 	@objc
 	private func selectInstallDiskFileButtonPushed() {
 		didTapSelectInstallDiskButton()
+	}
+
+	@objc
+	private func selectRomFileButtonPushed() {
+		didTapSelectRomFileButton()
 	}
 }
 

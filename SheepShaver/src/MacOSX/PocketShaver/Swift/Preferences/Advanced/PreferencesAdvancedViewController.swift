@@ -355,7 +355,10 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 				return PreferencesAdvancedBootstrapCell(
 					romDescription: model.currentRomFileDescription!,
 					didTapSelectInstallDiskButton: { [weak self] in
-						self?.displayRomPicker()
+						self?.displayRomPicker(source: .installDisc)
+					},
+					didTapSelectRomFileButton: { [weak self] in
+						self?.displayRomPicker(source: .romFile)
 					}
 				)
 			case .resourcesSetupInstuctions:
@@ -526,9 +529,15 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 		dataSource.apply(snapshot)
 	}
 
-	private func displayRomPicker() {
+	private enum RomPickerSource {
+		case installDisc
+		case romFile
+	}
+
+	private func displayRomPicker(source: RomPickerSource) {
 		let pickerVC = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
 		pickerVC.delegate = self
+		pickerVC.view.tag = source == .installDisc ? 0 : 1
 
 		present(pickerVC, animated: true)
 	}
@@ -549,6 +558,18 @@ class PreferencesAdvancedViewController: PreferencesTableViewController {
 		let alertVC = UIAlertController(
 			title: "Mac OS install disc image not compatible",
 			message: "The provided file is not a compatible Mac OS install disc image for bootstrapping PocketShaver. Check 'Compatibility list' for guidence.",
+			preferredStyle: .alert
+		)
+
+		alertVC.addAction(.init(title: "Ok", style: .default))
+
+		present(alertVC, animated: true)
+	}
+
+	private func displayInvalidRomFileDialogue() {
+		let alertVC = UIAlertController(
+			title: "ROM file not compatible",
+			message: "The provided file is not a compatible ROM file for bootstrapping PocketShaver. Check 'Bootstrap compatibility list' for guidence.",
 			preferredStyle: .alert
 		)
 
@@ -695,9 +716,16 @@ extension PreferencesAdvancedViewController: UIDocumentPickerDelegate {
 			return
 		}
 
+		let source: RomPickerSource = controller.view.tag == 1 ? .romFile : .installDisc
+
 		Task { [weak self, model] in
 			guard let self else { return }
-			let validationResult = await model.didSelectMacOsInstallDiskCandidate(url: url)
+			let validationResult: RomValidationResult
+			if source == .romFile {
+				validationResult = await model.didSelectRomFileCandidate(url: url)
+			} else {
+				validationResult = await model.didSelectMacOsInstallDiskCandidate(url: url)
+			}
 			switch validationResult {
 			case .success:
 				displaySuccesfulBoostrapDialogue()
@@ -705,7 +733,11 @@ extension PreferencesAdvancedViewController: UIDocumentPickerDelegate {
 			case .incompatibleRom(let newWorldRomVersion):
 				displayIncompatibleRomFoundDialogue(newWorldRomVersion)
 			case .invalidFile:
-				displayNoRomFoundDialogue()
+				if source == .romFile {
+					displayInvalidRomFileDialogue()
+				} else {
+					displayNoRomFoundDialogue()
+				}
 			case .error(let error):
 				let errorVC = UIAlertController.withError(error)
 				present(errorVC, animated: true)
